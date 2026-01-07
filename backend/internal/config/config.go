@@ -235,6 +235,7 @@ type GatewaySchedulingConfig struct {
 	// 粘性会话排队配置
 	StickySessionMaxWaiting  int           `mapstructure:"sticky_session_max_waiting"`
 	StickySessionWaitTimeout time.Duration `mapstructure:"sticky_session_wait_timeout"`
+	StickySessionTTL         time.Duration `mapstructure:"sticky_session_ttl"` // 粘性会话 TTL（小时）
 
 	// 兜底排队配置
 	FallbackWaitTimeout time.Duration `mapstructure:"fallback_wait_timeout"`
@@ -547,6 +548,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.max_line_size", 10*1024*1024)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 45*time.Second)
+	viper.SetDefault("gateway.scheduling.sticky_session_ttl", 1*time.Hour) // 粘性会话 TTL 默认 1 小时
 	viper.SetDefault("gateway.scheduling.fallback_wait_timeout", 30*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_max_waiting", 100)
 	viper.SetDefault("gateway.scheduling.load_batch_enabled", true)
@@ -690,6 +692,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Scheduling.StickySessionWaitTimeout <= 0 {
 		return fmt.Errorf("gateway.scheduling.sticky_session_wait_timeout must be positive")
+	}
+	if c.Gateway.Scheduling.StickySessionTTL <= 0 {
+		return fmt.Errorf("gateway.scheduling.sticky_session_ttl must be positive")
 	}
 	if c.Gateway.Scheduling.FallbackWaitTimeout <= 0 {
 		return fmt.Errorf("gateway.scheduling.fallback_wait_timeout must be positive")

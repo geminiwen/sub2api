@@ -116,6 +116,25 @@ services:
       # Proxy for accessing GitHub (online updates + pricing data)
       # Examples: http://host:port, socks5://host:port
       - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
+
+      # =======================================================================
+      # Gateway Scheduling Configuration (Optional)
+      # =======================================================================
+      # Sticky session max waiting count (default: 3)
+      - GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING=${GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING:-3}
+      # Sticky session wait timeout (default: 45s)
+      - GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT=${GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT:-45s}
+      # Sticky session TTL - time to keep session binding (default: 1h)
+      # Supported formats: 1h (1 hour), 30m (30 minutes), 2h30m (2.5 hours)
+      - GATEWAY_SCHEDULING_STICKY_SESSION_TTL=${GATEWAY_SCHEDULING_STICKY_SESSION_TTL:-1h}
+      # Fallback wait timeout (default: 30s)
+      - GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT=${GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT:-30s}
+      # Fallback max waiting count (default: 100)
+      - GATEWAY_SCHEDULING_FALLBACK_MAX_WAITING=${GATEWAY_SCHEDULING_FALLBACK_MAX_WAITING:-100}
+      # Enable load-aware batch scheduling (default: true)
+      - GATEWAY_SCHEDULING_LOAD_BATCH_ENABLED=${GATEWAY_SCHEDULING_LOAD_BATCH_ENABLED:-true}
+      # Expired slot cleanup interval (default: 30s, 0 to disable)
+      - GATEWAY_SCHEDULING_SLOT_CLEANUP_INTERVAL=${GATEWAY_SCHEDULING_SLOT_CLEANUP_INTERVAL:-30s}
     depends_on:
       postgres:
         condition: service_healthy

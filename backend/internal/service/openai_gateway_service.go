@@ -29,8 +29,7 @@ const (
 	// ChatGPT internal API for OAuth accounts
 	chatgptCodexURL = "https://chatgpt.com/backend-api/codex/responses"
 	// OpenAI Platform API for API Key accounts (fallback)
-	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
-	openaiStickySessionTTL = time.Hour // 粘性会话TTL
+	openaiPlatformAPIURL = "https://api.openai.com/v1/responses"
 )
 
 // openaiSSEDataRe matches SSE data lines with optional whitespace after colon.
@@ -138,7 +137,7 @@ func (s *OpenAIGatewayService) BindStickySession(ctx context.Context, sessionHas
 	if sessionHash == "" || accountID <= 0 {
 		return nil
 	}
-	return s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, accountID, openaiStickySessionTTL)
+	return s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, accountID, s.cfg.Gateway.Scheduling.StickySessionTTL)
 }
 
 // SelectAccount selects an OpenAI account with sticky session support
@@ -161,7 +160,7 @@ func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.C
 				account, err := s.accountRepo.GetByID(ctx, accountID)
 				if err == nil && account.IsSchedulable() && account.IsOpenAI() && (requestedModel == "" || account.IsModelSupported(requestedModel)) {
 					// Refresh sticky session TTL
-					_ = s.cache.RefreshSessionTTL(ctx, "openai:"+sessionHash, openaiStickySessionTTL)
+					_ = s.cache.RefreshSessionTTL(ctx, "openai:"+sessionHash, s.cfg.Gateway.Scheduling.StickySessionTTL)
 					return account, nil
 				}
 			}
@@ -227,7 +226,7 @@ func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.C
 
 	// 4. Set sticky session
 	if sessionHash != "" {
-		_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, selected.ID, openaiStickySessionTTL)
+		_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL)
 	}
 
 	return selected, nil
@@ -305,7 +304,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 				(requestedModel == "" || account.IsModelSupported(requestedModel)) {
 				result, err := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 				if err == nil && result.Acquired {
-					_ = s.cache.RefreshSessionTTL(ctx, "openai:"+sessionHash, openaiStickySessionTTL)
+					_ = s.cache.RefreshSessionTTL(ctx, "openai:"+sessionHash, s.cfg.Gateway.Scheduling.StickySessionTTL)
 					return &AccountSelectionResult{
 						Account:     account,
 						Acquired:    true,
@@ -362,7 +361,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 			result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
 			if err == nil && result.Acquired {
 				if sessionHash != "" {
-					_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, acc.ID, openaiStickySessionTTL)
+					_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, acc.ID, s.cfg.Gateway.Scheduling.StickySessionTTL)
 				}
 				return &AccountSelectionResult{
 					Account:     acc,
@@ -415,7 +414,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 				result, err := s.tryAcquireAccountSlot(ctx, item.account.ID, item.account.Concurrency)
 				if err == nil && result.Acquired {
 					if sessionHash != "" {
-						_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, item.account.ID, openaiStickySessionTTL)
+						_ = s.cache.SetSessionAccountID(ctx, "openai:"+sessionHash, item.account.ID, s.cfg.Gateway.Scheduling.StickySessionTTL)
 					}
 					return &AccountSelectionResult{
 						Account:     item.account,

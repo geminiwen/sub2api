@@ -169,6 +169,30 @@ gateway:
   # Allow failover on selected 400 errors (default: off)
   # 允许在特定 400 错误时进行故障转移（默认：关闭）
   failover_on_400: false
+  # Account scheduling configuration
+  # 账号调度配置
+  scheduling:
+    # Maximum concurrent requests waiting for sticky session account (default: 3)
+    # 粘性会话账号的最大排队等待数（默认：3）
+    sticky_session_max_waiting: 3
+    # Timeout for waiting sticky session account (default: 45s)
+    # 粘性会话账号的等待超时时间（默认：45 秒）
+    sticky_session_wait_timeout: 45s
+    # Sticky session TTL in hours (default: 1h)
+    # 粘性会话 TTL，以小时为单位（默认：1 小时）
+    sticky_session_ttl: 1h
+    # Fallback timeout for non-sticky session requests (default: 30s)
+    # 非粘性会话请求的降级超时时间（默认：30 秒）
+    fallback_wait_timeout: 30s
+    # Maximum concurrent requests waiting in fallback mode (default: 100)
+    # 降级模式下的最大排队等待数（默认：100）
+    fallback_max_waiting: 100
+    # Enable load-aware batch scheduling (default: true)
+    # 启用负载感知批量调度（默认：启用）
+    load_batch_enabled: true
+    # Expired slot cleanup interval (default: 30s, 0 to disable)
+    # 过期槽位清理间隔（默认：30 秒，0 表示禁用）
+    slot_cleanup_interval: 30s
 
 # =============================================================================
 # Concurrency Wait Configuration

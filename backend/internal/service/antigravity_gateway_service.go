@@ -21,10 +21,9 @@ import (
 )
 
 const (
-	antigravityStickySessionTTL = time.Hour
-	antigravityMaxRetries       = 3
-	antigravityRetryBaseDelay   = 1 * time.Second
-	antigravityRetryMaxDelay    = 16 * time.Second
+	antigravityMaxRetries     = 3
+	antigravityRetryBaseDelay = 1 * time.Second
+	antigravityRetryMaxDelay  = 16 * time.Second
 )
 
 // getSessionID 从 gin.Context 获取 session_id（用于日志追踪）

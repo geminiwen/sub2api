@@ -66,7 +66,22 @@ type SetupConfig struct {
 	Admin    AdminConfig    `json:"admin" yaml:"-"` // Not stored in config file
 	Server   ServerConfig   `json:"server" yaml:"server"`
 	JWT      JWTConfig      `json:"jwt" yaml:"jwt"`
+	Gateway  GatewayConfig  `json:"gateway" yaml:"gateway"`
 	Timezone string         `json:"timezone" yaml:"timezone"` // e.g. "Asia/Shanghai", "UTC"
+}
+
+type GatewayConfig struct {
+	Scheduling GatewaySchedulingConfig `json:"scheduling" yaml:"scheduling"`
+}
+
+type GatewaySchedulingConfig struct {
+	StickySessionMaxWaiting  int           `json:"sticky_session_max_waiting" yaml:"sticky_session_max_waiting"`
+	StickySessionWaitTimeout time.Duration `json:"sticky_session_wait_timeout" yaml:"sticky_session_wait_timeout"`
+	StickySessionTTL         time.Duration `json:"sticky_session_ttl" yaml:"sticky_session_ttl"`
+	FallbackWaitTimeout      time.Duration `json:"fallback_wait_timeout" yaml:"fallback_wait_timeout"`
+	FallbackMaxWaiting       int           `json:"fallback_max_waiting" yaml:"fallback_max_waiting"`
+	LoadBatchEnabled         bool          `json:"load_batch_enabled" yaml:"load_batch_enabled"`
+	SlotCleanupInterval      time.Duration `json:"slot_cleanup_interval" yaml:"slot_cleanup_interval"`
 }
 
 type DatabaseConfig struct {
@@ -375,6 +390,17 @@ func writeConfigFile(cfg *SetupConfig) error {
 			Secret     string `yaml:"secret"`
 			ExpireHour int    `yaml:"expire_hour"`
 		} `yaml:"jwt"`
+		Gateway struct {
+			Scheduling struct {
+				StickySessionMaxWaiting  int           `yaml:"sticky_session_max_waiting"`
+				StickySessionWaitTimeout time.Duration `yaml:"sticky_session_wait_timeout"`
+				StickySessionTTL         time.Duration `yaml:"sticky_session_ttl"`
+				FallbackWaitTimeout      time.Duration `yaml:"fallback_wait_timeout"`
+				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
+				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
+				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+			} `yaml:"scheduling"`
+		} `yaml:"gateway"`
 		Default struct {
 			UserConcurrency int     `yaml:"user_concurrency"`
 			UserBalance     float64 `yaml:"user_balance"`
@@ -396,6 +422,35 @@ func writeConfigFile(cfg *SetupConfig) error {
 		}{
 			Secret:     cfg.JWT.Secret,
 			ExpireHour: cfg.JWT.ExpireHour,
+		},
+		Gateway: struct {
+			Scheduling struct {
+				StickySessionMaxWaiting  int           `yaml:"sticky_session_max_waiting"`
+				StickySessionWaitTimeout time.Duration `yaml:"sticky_session_wait_timeout"`
+				StickySessionTTL         time.Duration `yaml:"sticky_session_ttl"`
+				FallbackWaitTimeout      time.Duration `yaml:"fallback_wait_timeout"`
+				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
+				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
+				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+			} `yaml:"scheduling"`
+		}{
+			Scheduling: struct {
+				StickySessionMaxWaiting  int           `yaml:"sticky_session_max_waiting"`
+				StickySessionWaitTimeout time.Duration `yaml:"sticky_session_wait_timeout"`
+				StickySessionTTL         time.Duration `yaml:"sticky_session_ttl"`
+				FallbackWaitTimeout      time.Duration `yaml:"fallback_wait_timeout"`
+				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
+				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
+				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+			}{
+				StickySessionMaxWaiting:  cfg.Gateway.Scheduling.StickySessionMaxWaiting,
+				StickySessionWaitTimeout: cfg.Gateway.Scheduling.StickySessionWaitTimeout,
+				StickySessionTTL:         cfg.Gateway.Scheduling.StickySessionTTL,
+				FallbackWaitTimeout:      cfg.Gateway.Scheduling.FallbackWaitTimeout,
+				FallbackMaxWaiting:       cfg.Gateway.Scheduling.FallbackMaxWaiting,
+				LoadBatchEnabled:         cfg.Gateway.Scheduling.LoadBatchEnabled,
+				SlotCleanupInterval:      cfg.Gateway.Scheduling.SlotCleanupInterval,
+			},
 		},
 		Default: struct {
 			UserConcurrency int     `yaml:"user_concurrency"`
@@ -462,6 +517,26 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 	return defaultValue
 }
 
+// getEnvDurationOrDefault gets environment variable as time.Duration or returns default value
+// Supports formats like "1h", "30m", "45s", "1h30m"
+func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
+	if val := os.Getenv(key); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			return d
+		}
+		log.Printf("Warning: invalid duration format for %s=%s, using default %v", key, val, defaultValue)
+	}
+	return defaultValue
+}
+
+// getEnvBoolOrDefault gets environment variable as bool or returns default value
+func getEnvBoolOrDefault(key string, defaultValue bool) bool {
+	if val := os.Getenv(key); val != "" {
+		return val == "true" || val == "1" || val == "yes"
+	}
+	return defaultValue
+}
+
 // AutoSetupFromEnv performs automatic setup using environment variables
 // This is designed for Docker deployment where all config is passed via env vars
 func AutoSetupFromEnv() error {
@@ -502,6 +577,17 @@ func AutoSetupFromEnv() error {
 		JWT: JWTConfig{
 			Secret:     getEnvOrDefault("JWT_SECRET", ""),
 			ExpireHour: getEnvIntOrDefault("JWT_EXPIRE_HOUR", 24),
+		},
+		Gateway: GatewayConfig{
+			Scheduling: GatewaySchedulingConfig{
+				StickySessionMaxWaiting:  getEnvIntOrDefault("GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING", 3),
+				StickySessionWaitTimeout: getEnvDurationOrDefault("GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT", 45*time.Second),
+				StickySessionTTL:         getEnvDurationOrDefault("GATEWAY_SCHEDULING_STICKY_SESSION_TTL", 1*time.Hour),
+				FallbackWaitTimeout:      getEnvDurationOrDefault("GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT", 30*time.Second),
+				FallbackMaxWaiting:       getEnvIntOrDefault("GATEWAY_SCHEDULING_FALLBACK_MAX_WAITING", 100),
+				LoadBatchEnabled:         getEnvBoolOrDefault("GATEWAY_SCHEDULING_LOAD_BATCH_ENABLED", true),
+				SlotCleanupInterval:      getEnvDurationOrDefault("GATEWAY_SCHEDULING_SLOT_CLEANUP_INTERVAL", 30*time.Second),
+			},
 		},
 		Timezone: tz,
 	}

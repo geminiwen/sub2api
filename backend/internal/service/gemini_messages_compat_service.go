@@ -28,8 +28,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const geminiStickySessionTTL = time.Hour
-
 const (
 	geminiMaxRetries     = 5
 	geminiRetryBaseDelay = 1 * time.Second
@@ -133,7 +131,7 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 							}
 						}
 						if usable {
-							_ = s.cache.RefreshSessionTTL(ctx, cacheKey, geminiStickySessionTTL)
+							_ = s.cache.RefreshSessionTTL(ctx, cacheKey, s.cfg.Gateway.Scheduling.StickySessionTTL)
 							return account, nil
 						}
 					}
@@ -217,7 +215,7 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 	}
 
 	if sessionHash != "" {
-		_ = s.cache.SetSessionAccountID(ctx, cacheKey, selected.ID, geminiStickySessionTTL)
+		_ = s.cache.SetSessionAccountID(ctx, cacheKey, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL)
 	}
 
 	return selected, nil
