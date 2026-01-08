@@ -122,18 +122,19 @@ type UpdateGroupInput struct {
 }
 
 type CreateAccountInput struct {
-	Name               string
-	Notes              *string
-	Platform           string
-	Type               string
-	Credentials        map[string]any
-	Extra              map[string]any
-	ProxyID            *int64
-	Concurrency        int
-	Priority           int
-	GroupIDs           []int64
-	ExpiresAt          *int64
-	AutoPauseOnExpired *bool
+	Name                string
+	Notes               *string
+	Platform            string
+	Type                string
+	Credentials         map[string]any
+	Extra               map[string]any
+	ProxyID             *int64
+	Concurrency         int
+	SessionLimitEnabled bool
+	Priority            int
+	GroupIDs            []int64
+	ExpiresAt           *int64
+	AutoPauseOnExpired  *bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
@@ -147,6 +148,7 @@ type UpdateAccountInput struct {
 	Extra                 map[string]any
 	ProxyID               *int64
 	Concurrency           *int // 使用指针区分"未提供"和"设置为0"
+	SessionLimitEnabled   bool // 默认值 false，无需指针
 	Priority              *int // 使用指针区分"未提供"和"设置为0"
 	Status                string
 	GroupIDs              *[]int64
@@ -246,6 +248,7 @@ type adminServiceImpl struct {
 	redeemCodeRepo      RedeemCodeRepository
 	billingCacheService *BillingCacheService
 	proxyProber         ProxyExitInfoProber
+	gatewayCache        GatewayCache
 }
 
 // NewAdminService creates a new AdminService
@@ -258,6 +261,7 @@ func NewAdminService(
 	redeemCodeRepo RedeemCodeRepository,
 	billingCacheService *BillingCacheService,
 	proxyProber ProxyExitInfoProber,
+	gatewayCache GatewayCache,
 ) AdminService {
 	return &adminServiceImpl{
 		userRepo:            userRepo,
@@ -268,6 +272,7 @@ func NewAdminService(
 		redeemCodeRepo:      redeemCodeRepo,
 		billingCacheService: billingCacheService,
 		proxyProber:         proxyProber,
+		gatewayCache:        gatewayCache,
 	}
 }
 
@@ -717,6 +722,17 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 
+	// 设置 session limit enabled 到 Redis
+	if s.gatewayCache != nil {
+		if err := s.gatewayCache.SetAccountSessionLimitEnabled(ctx, account.ID, input.SessionLimitEnabled); err != nil {
+			// 日志记录错误但不中断创建流程
+			log.Printf("failed to set account session limit enabled: account_id=%d err=%v", account.ID, err)
+		}
+	}
+
+	// Set session limit enabled in account object for response
+	account.SessionLimitEnabled = input.SessionLimitEnabled
+
 	// 绑定分组
 	if len(groupIDs) > 0 {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
@@ -761,7 +777,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Concurrency != nil {
 		account.Concurrency = *input.Concurrency
 	}
-	// 只在指针非 nil 时更新 Priority（支持设置为 0）
+	// 只在指针非 nil 时更新 Priority（支持设置为0）
 	if input.Priority != nil {
 		account.Priority = *input.Priority
 	}
@@ -800,6 +816,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, err
 	}
 
+	// 更新 session limit enabled 到 Redis
+	if s.gatewayCache != nil {
+		if err := s.gatewayCache.SetAccountSessionLimitEnabled(ctx, account.ID, input.SessionLimitEnabled); err != nil {
+			log.Printf("failed to set account session limit enabled: account_id=%d err=%v", account.ID, err)
+		}
+	}
+
 	// 绑定分组
 	if input.GroupIDs != nil {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
@@ -808,7 +831,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	// 重新查询以确保返回完整数据（包括正确的 Proxy 关联对象）
-	return s.accountRepo.GetByID(ctx, id)
+	updated, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Set session limit enabled in account object for response
+	updated.SessionLimitEnabled = input.SessionLimitEnabled
+	return updated, nil
 }
 
 // BulkUpdateAccounts updates multiple accounts in one request.
@@ -908,6 +937,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	// 清理 Redis 中的会话计数
+	if s.gatewayCache != nil {
+		_ = s.gatewayCache.DeleteAccountSessionCount(ctx, id)
+	}
 	return s.accountRepo.Delete(ctx, id)
 }
 

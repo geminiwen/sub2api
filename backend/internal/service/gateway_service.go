@@ -82,6 +82,14 @@ type GatewayCache interface {
 	GetSessionAccountID(ctx context.Context, sessionHash string) (int64, error)
 	SetSessionAccountID(ctx context.Context, sessionHash string, accountID int64, ttl time.Duration) error
 	RefreshSessionTTL(ctx context.Context, sessionHash string, ttl time.Duration) error
+	IncrAccountSessionCount(ctx context.Context, accountID int64, ttl time.Duration) (int64, error)
+	GetAccountSessionCount(ctx context.Context, accountID int64) (int64, error)
+	GetAccountSessionCountBatch(ctx context.Context, accountIDs []int64) (map[int64]int64, error)
+	DeleteAccountSessionCount(ctx context.Context, accountID int64) error
+	// Session limit enabled flag
+	SetAccountSessionLimitEnabled(ctx context.Context, accountID int64, enabled bool) error
+	GetAccountSessionLimitEnabled(ctx context.Context, accountID int64) (bool, error)
+	DeleteAccountSessionLimitEnabled(ctx context.Context, accountID int64) error
 }
 
 type AccountWaitPlan struct {
@@ -777,6 +785,16 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		if requestedModel != "" && !s.isModelSupportedByAccount(acc, requestedModel) {
 			continue
 		}
+		// 检查账号级别的 session 计数是否超限（从 Redis 读取开关状态 + 全局限制值）
+		if s.cache != nil {
+			enabled, _ := s.cache.GetAccountSessionLimitEnabled(ctx, acc.ID)
+			if enabled {
+				count, _ := s.cache.GetAccountSessionCount(ctx, acc.ID)
+				if count >= int64(s.cfg.Gateway.Scheduling.SessionCountWindowLimit) {
+					continue // 跳过超限账号
+				}
+			}
+		}
 		if selected == nil {
 			selected = acc
 			continue
@@ -812,6 +830,11 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	if sessionHash != "" && s.cache != nil {
 		if err := s.cache.SetSessionAccountID(ctx, sessionHash, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL); err != nil {
 			log.Printf("set session account failed: session=%s account_id=%d err=%v", sessionHash, selected.ID, err)
+		} else {
+			// 增加 session 计数（无论开关是否启用都记录，便于展示）
+			if _, err := s.cache.IncrAccountSessionCount(ctx, selected.ID, s.cfg.Gateway.Scheduling.SessionCountWindow); err != nil {
+				log.Printf("incr account session count failed: account_id=%d err=%v", selected.ID, err)
+			}
 		}
 	}
 
@@ -869,6 +892,16 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if requestedModel != "" && !s.isModelSupportedByAccount(acc, requestedModel) {
 			continue
 		}
+		// 检查账号级别的 session 计数是否超限（从 Redis 读取开关状态 + 全局限制值）
+		if s.cache != nil {
+			enabled, _ := s.cache.GetAccountSessionLimitEnabled(ctx, acc.ID)
+			if enabled {
+				count, _ := s.cache.GetAccountSessionCount(ctx, acc.ID)
+				if count >= int64(s.cfg.Gateway.Scheduling.SessionCountWindowLimit) {
+					continue // 跳过超限账号
+				}
+			}
+		}
 		if selected == nil {
 			selected = acc
 			continue
@@ -904,6 +937,11 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	if sessionHash != "" && s.cache != nil {
 		if err := s.cache.SetSessionAccountID(ctx, sessionHash, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL); err != nil {
 			log.Printf("set session account failed: session=%s account_id=%d err=%v", sessionHash, selected.ID, err)
+		} else {
+			// 增加 session 计数（无论开关是否启用都记录，便于展示）
+			if _, err := s.cache.IncrAccountSessionCount(ctx, selected.ID, s.cfg.Gateway.Scheduling.SessionCountWindow); err != nil {
+				log.Printf("incr account session count failed: account_id=%d err=%v", selected.ID, err)
+			}
 		}
 	}
 

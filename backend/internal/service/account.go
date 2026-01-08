@@ -9,23 +9,24 @@ import (
 )
 
 type Account struct {
-	ID                 int64
-	Name               string
-	Notes              *string
-	Platform           string
-	Type               string
-	Credentials        map[string]any
-	Extra              map[string]any
-	ProxyID            *int64
-	Concurrency        int
-	Priority           int
-	Status             string
-	ErrorMessage       string
-	LastUsedAt         *time.Time
-	ExpiresAt          *time.Time
-	AutoPauseOnExpired bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                  int64
+	Name                string
+	Notes               *string
+	Platform            string
+	Type                string
+	Credentials         map[string]any
+	Extra               map[string]any
+	ProxyID             *int64
+	Concurrency         int
+	SessionLimitEnabled bool // 从 Redis 加载，不存数据库
+	Priority            int
+	Status              string
+	ErrorMessage        string
+	LastUsedAt          *time.Time
+	ExpiresAt           *time.Time
+	AutoPauseOnExpired  bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 
 	Schedulable bool
 

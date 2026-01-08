@@ -44,6 +44,24 @@
               </span>
             </div>
           </template>
+          <template #cell-session_count="{ row }">
+            <span
+              :class="[
+                'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium',
+                row.session_limit_enabled && row.session_count >= row.session_limit_max
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                  : row.session_count > 0
+                    ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+              ]"
+            >
+              <span class="font-mono">{{ row.session_count || 0 }}</span>
+              <template v-if="row.session_limit_enabled">
+                <span class="text-gray-400 dark:text-gray-500">/</span>
+                <span class="font-mono">{{ row.session_limit_max }}</span>
+              </template>
+            </span>
+          </template>
           <template #cell-status="{ row }">
             <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
           </template>
@@ -186,6 +204,7 @@ const cols = computed(() => {
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
     { key: 'concurrency', label: t('admin.accounts.columns.concurrencyStatus'), sortable: false },
+    { key: 'session_count', label: t('admin.accounts.columns.sessionCount'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }

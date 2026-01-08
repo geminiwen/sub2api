@@ -120,6 +120,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Extra:                   a.Extra,
 		ProxyID:                 a.ProxyID,
 		Concurrency:             a.Concurrency,
+		SessionLimitEnabled:     a.SessionLimitEnabled,
 		Priority:                a.Priority,
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,

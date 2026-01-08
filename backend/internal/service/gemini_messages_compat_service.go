@@ -173,6 +173,16 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 		if requestedModel != "" && !s.isModelSupportedByAccount(acc, requestedModel) {
 			continue
 		}
+		// 检查账号级别的 session 计数是否超限（从 Redis 读取开关状态 + 全局限制值）
+		if s.cache != nil {
+			enabled, _ := s.cache.GetAccountSessionLimitEnabled(ctx, acc.ID)
+			if enabled {
+				count, _ := s.cache.GetAccountSessionCount(ctx, acc.ID)
+				if count >= int64(s.cfg.Gateway.Scheduling.SessionCountWindowLimit) {
+					continue // 跳过超限账号
+				}
+			}
+		}
 		if s.rateLimitService != nil && requestedModel != "" {
 			ok, err := s.rateLimitService.PreCheckUsage(ctx, acc, requestedModel)
 			if err != nil {
@@ -215,7 +225,12 @@ func (s *GeminiMessagesCompatService) SelectAccountForModelWithExclusions(ctx co
 	}
 
 	if sessionHash != "" {
-		_ = s.cache.SetSessionAccountID(ctx, cacheKey, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL)
+		if err := s.cache.SetSessionAccountID(ctx, cacheKey, selected.ID, s.cfg.Gateway.Scheduling.StickySessionTTL); err == nil {
+			// 增加 session 计数（无论开关是否启用都记录，便于展示）
+			if _, err := s.cache.IncrAccountSessionCount(ctx, selected.ID, s.cfg.Gateway.Scheduling.SessionCountWindow); err != nil {
+				log.Printf("incr account session count failed: account_id=%d err=%v", selected.ID, err)
+			}
+		}
 	}
 
 	return selected, nil

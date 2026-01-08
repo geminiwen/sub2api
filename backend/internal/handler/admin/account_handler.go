@@ -44,6 +44,7 @@ type AccountHandler struct {
 	accountTestService      *service.AccountTestService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
+	gatewayCache            service.GatewayCache
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -58,6 +59,7 @@ func NewAccountHandler(
 	accountTestService *service.AccountTestService,
 	concurrencyService *service.ConcurrencyService,
 	crsSyncService *service.CRSSyncService,
+	gatewayCache service.GatewayCache,
 ) *AccountHandler {
 	return &AccountHandler{
 		adminService:            adminService,
@@ -70,6 +72,7 @@ func NewAccountHandler(
 		accountTestService:      accountTestService,
 		concurrencyService:      concurrencyService,
 		crsSyncService:          crsSyncService,
+		gatewayCache:            gatewayCache,
 	}
 }
 
@@ -83,6 +86,7 @@ type CreateAccountRequest struct {
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             int            `json:"concurrency"`
+	SessionLimitEnabled     bool           `json:"session_limit_enabled"`
 	Priority                int            `json:"priority"`
 	GroupIDs                []int64        `json:"group_ids"`
 	ExpiresAt               *int64         `json:"expires_at"`
@@ -100,6 +104,7 @@ type UpdateAccountRequest struct {
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             *int           `json:"concurrency"`
+	SessionLimitEnabled     bool           `json:"session_limit_enabled"`
 	Priority                *int           `json:"priority"`
 	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive"`
 	GroupIDs                *[]int64       `json:"group_ids"`
@@ -114,6 +119,8 @@ type BulkUpdateAccountsRequest struct {
 	Name                    string         `json:"name"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             *int           `json:"concurrency"`
+	SessionLimitEnabled     bool           `json:"session_limit_enabled"`
+	SessionLimitMax         int            `json:"session_limit_max"`
 	Priority                *int           `json:"priority"`
 	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
 	GroupIDs                *[]int64       `json:"group_ids"`
@@ -125,7 +132,8 @@ type BulkUpdateAccountsRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
-	CurrentConcurrency int `json:"current_concurrency"`
+	CurrentConcurrency int   `json:"current_concurrency"`
+	SessionCount       int64 `json:"session_count"`
 }
 
 // List handles listing all accounts with pagination
@@ -143,7 +151,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		return
 	}
 
-	// Get current concurrency counts for all accounts
+	// Get current concurrency counts and session counts for all accounts
 	accountIDs := make([]int64, len(accounts))
 	for i, acc := range accounts {
 		accountIDs[i] = acc.ID
@@ -155,12 +163,34 @@ func (h *AccountHandler) List(c *gin.Context) {
 		concurrencyCounts = make(map[int64]int)
 	}
 
-	// Build response with concurrency info
+	sessionCounts := make(map[int64]int64)
+	sessionLimitEnabled := make(map[int64]bool)
+	if h.gatewayCache != nil {
+		sessionCounts, err = h.gatewayCache.GetAccountSessionCountBatch(c.Request.Context(), accountIDs)
+		if err != nil {
+			// Log error but don't fail the request, just use 0 for all
+			sessionCounts = make(map[int64]int64)
+		}
+		// Batch load session limit enabled flags from Redis
+		for _, accID := range accountIDs {
+			enabled, err := h.gatewayCache.GetAccountSessionLimitEnabled(c.Request.Context(), accID)
+			if err == nil {
+				sessionLimitEnabled[accID] = enabled
+			}
+		}
+	}
+
+	// Build response with concurrency and session count info
 	result := make([]AccountWithConcurrency, len(accounts))
 	for i := range accounts {
+		// Update SessionLimitEnabled from Redis
+		if enabled, ok := sessionLimitEnabled[accounts[i].ID]; ok {
+			accounts[i].SessionLimitEnabled = enabled
+		}
 		result[i] = AccountWithConcurrency{
 			Account:            dto.AccountFromService(&accounts[i]),
 			CurrentConcurrency: concurrencyCounts[accounts[i].ID],
+			SessionCount:       sessionCounts[accounts[i].ID],
 		}
 	}
 
@@ -180,6 +210,13 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+
+	// Load session limit enabled from Redis
+	if h.gatewayCache != nil {
+		if enabled, err := h.gatewayCache.GetAccountSessionLimitEnabled(c.Request.Context(), account.ID); err == nil {
+			account.SessionLimitEnabled = enabled
+		}
 	}
 
 	response.Success(c, dto.AccountFromService(account))
@@ -206,6 +243,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		Extra:                 req.Extra,
 		ProxyID:               req.ProxyID,
 		Concurrency:           req.Concurrency,
+		SessionLimitEnabled:   req.SessionLimitEnabled,
 		Priority:              req.Priority,
 		GroupIDs:              req.GroupIDs,
 		ExpiresAt:             req.ExpiresAt,
@@ -264,7 +302,8 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		Extra:                 req.Extra,
 		ProxyID:               req.ProxyID,
 		Concurrency:           req.Concurrency, // 指针类型，nil 表示未提供
-		Priority:              req.Priority,    // 指针类型，nil 表示未提供
+		SessionLimitEnabled:   req.SessionLimitEnabled,
+		Priority:              req.Priority, // 指针类型，nil 表示未提供
 		Status:                req.Status,
 		GroupIDs:              req.GroupIDs,
 		ExpiresAt:             req.ExpiresAt,

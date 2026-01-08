@@ -246,6 +246,10 @@ type GatewaySchedulingConfig struct {
 
 	// 过期槽位清理周期（0 表示禁用）
 	SlotCleanupInterval time.Duration `mapstructure:"slot_cleanup_interval"`
+
+	// Session 计数限制配置（全局限制值，通过账号级别的 SessionLimitEnabled 开关控制）
+	SessionCountWindowLimit int           `mapstructure:"session_count_window_limit"` // 时间窗口内最大 session 数
+	SessionCountWindow      time.Duration `mapstructure:"session_count_window"`       // session 计数时间窗口
 }
 
 func (s *ServerConfig) Address() string {
@@ -553,6 +557,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.fallback_max_waiting", 100)
 	viper.SetDefault("gateway.scheduling.load_batch_enabled", true)
 	viper.SetDefault("gateway.scheduling.slot_cleanup_interval", 30*time.Second)
+	// Session 计数限制配置默认值（全局限制值，由账号的 SessionLimitEnabled 字段控制是否启用）
+	viper.SetDefault("gateway.scheduling.session_count_window_limit", 100)
+	viper.SetDefault("gateway.scheduling.session_count_window", 1*time.Hour)
 	viper.SetDefault("concurrency.ping_interval", 10)
 
 	// TokenRefresh

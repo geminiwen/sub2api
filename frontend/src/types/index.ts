@@ -396,7 +396,9 @@ export interface Account {
   extra?: CodexUsageSnapshot & Record<string, unknown> // Extra fields including Codex usage
   proxy_id: number | null
   concurrency: number
+  session_limit_enabled: boolean
   current_concurrency?: number // Real-time concurrency count from Redis
+  session_count?: number // Session count in time window from Redis
   priority: number
   status: 'active' | 'inactive' | 'error'
   error_message: string | null
@@ -491,6 +493,7 @@ export interface CreateAccountRequest {
   extra?: Record<string, unknown>
   proxy_id?: number | null
   concurrency?: number
+  session_limit_enabled?: boolean
   priority?: number
   group_ids?: number[]
   expires_at?: number | null
@@ -506,6 +509,7 @@ export interface UpdateAccountRequest {
   extra?: Record<string, unknown>
   proxy_id?: number | null
   concurrency?: number
+  session_limit_enabled?: boolean
   priority?: number
   schedulable?: boolean
   status?: 'active' | 'inactive'

@@ -33,7 +33,7 @@ services:
       # Data persistence (config.yaml will be auto-generated here)
       - sub2api_data:/app/data
       # Mount custom config.yaml (optional, overrides auto-generated config)
-      - ./config.yaml:/app/data/config.yaml:ro
+      #- ./config.yaml:/app/data/config.yaml:ro
     environment:
       # =======================================================================
       # Auto Setup (REQUIRED for Docker deployment)

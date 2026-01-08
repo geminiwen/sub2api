@@ -1247,6 +1247,45 @@
         </div>
       </div>
 
+      <!-- Session Limit -->
+      <div>
+        <label class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            v-model="form.session_limit_enabled"
+            class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+          />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t('admin.accounts.sessionLimitEnabled') }}
+          </span>
+        </label>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.sessionLimitHint') }}
+        </p>
+      </div>
+
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <!-- Mixed Scheduling (only for antigravity accounts) -->
+        <div v-if="form.platform === 'antigravity'" class="flex items-center gap-2">
+          </div>
+          <button
+            type="button"
+            @click="autoPauseOnExpired = !autoPauseOnExpired"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              autoPauseOnExpired ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                autoPauseOnExpired ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <!-- Mixed Scheduling (only for antigravity accounts) -->
         <div v-if="form.platform === 'antigravity'" class="flex items-center gap-2">
@@ -1831,6 +1870,7 @@ const form = reactive({
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
   concurrency: 10,
+  session_limit_enabled: false,
   priority: 1,
   group_ids: [] as number[],
   expires_at: null as number | null
@@ -2098,6 +2138,7 @@ const resetForm = () => {
   form.credentials = {}
   form.proxy_id = null
   form.concurrency = 10
+  form.session_limit_enabled = false
   form.priority = 1
   form.group_ids = []
   form.expires_at = null
@@ -2251,6 +2292,7 @@ const createAccountAndFinish = async (
     extra,
     proxy_id: form.proxy_id,
     concurrency: form.concurrency,
+    session_limit_enabled: form.session_limit_enabled,
     priority: form.priority,
     group_ids: form.group_ids,
     expires_at: form.expires_at,
@@ -2468,6 +2510,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           extra,
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
+          session_limit_enabled: form.session_limit_enabled,
           priority: form.priority,
           auto_pause_on_expired: autoPauseOnExpired.value
         })

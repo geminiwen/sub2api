@@ -571,6 +571,28 @@
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
 
+      <!-- Session Limit -->
+      <div>
+        <label class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            v-model="form.session_limit_enabled"
+            class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+          />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t('admin.accounts.sessionLimitEnabled') }}
+          </span>
+        </label>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.sessionLimitHint') }}
+        </p>
+      </div>
+
+      <div>
+        <label class="input-label">{{ t('common.status') }}</label>
+        <Select v-model="form.status" :options="statusOptions" />
+      </div>
+
       <div>
         <div class="flex items-center justify-between">
           <div>
@@ -806,6 +828,7 @@ const form = reactive({
   notes: '',
   proxy_id: null as number | null,
   concurrency: 1,
+  session_limit_enabled: false,
   priority: 1,
   status: 'active' as 'active' | 'inactive',
   group_ids: [] as number[],
@@ -833,6 +856,7 @@ watch(
       form.notes = newAccount.notes || ''
       form.proxy_id = newAccount.proxy_id
       form.concurrency = newAccount.concurrency
+      form.session_limit_enabled = newAccount.session_limit_enabled || false
       form.priority = newAccount.priority
       form.status = newAccount.status as 'active' | 'inactive'
       form.group_ids = newAccount.group_ids || []
