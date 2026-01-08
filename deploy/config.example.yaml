@@ -193,6 +193,12 @@ gateway:
     # Expired slot cleanup interval (default: 30s, 0 to disable)
     # 过期槽位清理间隔（默认：30 秒，0 表示禁用）
     slot_cleanup_interval: 30s
+    # Session count window limit (global limit value, controlled by account-level SessionLimitEnabled flag)
+    # 会话计数窗口限制（全局限制值，由账号级别的 SessionLimitEnabled 开关控制）
+    session_count_window_limit: 100
+    # Session count time window (default: 1h)
+    # 会话计数时间窗口（默认：1 小时）
+    session_count_window: 1h
 
 # =============================================================================
 # Concurrency Wait Configuration

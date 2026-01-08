@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -34,6 +35,7 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
+	cfg                     *config.Config
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
@@ -49,6 +51,7 @@ type AccountHandler struct {
 
 // NewAccountHandler creates a new admin account handler
 func NewAccountHandler(
+	cfg *config.Config,
 	adminService service.AdminService,
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
@@ -62,6 +65,7 @@ func NewAccountHandler(
 	gatewayCache service.GatewayCache,
 ) *AccountHandler {
 	return &AccountHandler{
+		cfg:                     cfg,
 		adminService:            adminService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
@@ -132,8 +136,9 @@ type BulkUpdateAccountsRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
-	CurrentConcurrency int   `json:"current_concurrency"`
-	SessionCount       int64 `json:"session_count"`
+	CurrentConcurrency      int   `json:"current_concurrency"`
+	SessionCount            int64 `json:"session_count"`
+	SessionCountWindowLimit int   `json:"session_count_window_limit"` // 全局配置值
 }
 
 // List handles listing all accounts with pagination
@@ -182,15 +187,17 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 	// Build response with concurrency and session count info
 	result := make([]AccountWithConcurrency, len(accounts))
+	sessionCountWindowLimit := h.cfg.Gateway.Scheduling.SessionCountWindowLimit
 	for i := range accounts {
 		// Update SessionLimitEnabled from Redis
 		if enabled, ok := sessionLimitEnabled[accounts[i].ID]; ok {
 			accounts[i].SessionLimitEnabled = enabled
 		}
 		result[i] = AccountWithConcurrency{
-			Account:            dto.AccountFromService(&accounts[i]),
-			CurrentConcurrency: concurrencyCounts[accounts[i].ID],
-			SessionCount:       sessionCounts[accounts[i].ID],
+			Account:                 dto.AccountFromService(&accounts[i]),
+			CurrentConcurrency:      concurrencyCounts[accounts[i].ID],
+			SessionCount:            sessionCounts[accounts[i].ID],
+			SessionCountWindowLimit: sessionCountWindowLimit,
 		}
 	}
 

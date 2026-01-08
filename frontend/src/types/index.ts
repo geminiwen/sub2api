@@ -399,6 +399,7 @@ export interface Account {
   session_limit_enabled: boolean
   current_concurrency?: number // Real-time concurrency count from Redis
   session_count?: number // Session count in time window from Redis
+  session_count_window_limit?: number // Global config value for session limit
   priority: number
   status: 'active' | 'inactive' | 'error'
   error_message: string | null

@@ -48,7 +48,7 @@
             <span
               :class="[
                 'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium',
-                row.session_limit_enabled && row.session_count >= row.session_limit_max
+                row.session_limit_enabled && row.session_count >= (row.session_count_window_limit || 0)
                   ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                   : row.session_count > 0
                     ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
@@ -56,9 +56,9 @@
               ]"
             >
               <span class="font-mono">{{ row.session_count || 0 }}</span>
-              <template v-if="row.session_limit_enabled">
+              <template v-if="row.session_limit_enabled && row.session_count_window_limit">
                 <span class="text-gray-400 dark:text-gray-500">/</span>
-                <span class="font-mono">{{ row.session_limit_max }}</span>
+                <span class="font-mono">{{ row.session_count_window_limit }}</span>
               </template>
             </span>
           </template>

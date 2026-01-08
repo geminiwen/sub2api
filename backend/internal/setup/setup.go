@@ -82,6 +82,8 @@ type GatewaySchedulingConfig struct {
 	FallbackMaxWaiting       int           `json:"fallback_max_waiting" yaml:"fallback_max_waiting"`
 	LoadBatchEnabled         bool          `json:"load_batch_enabled" yaml:"load_batch_enabled"`
 	SlotCleanupInterval      time.Duration `json:"slot_cleanup_interval" yaml:"slot_cleanup_interval"`
+	SessionCountWindowLimit  int           `json:"session_count_window_limit" yaml:"session_count_window_limit"`
+	SessionCountWindow       time.Duration `json:"session_count_window" yaml:"session_count_window"`
 }
 
 type DatabaseConfig struct {
@@ -399,6 +401,8 @@ func writeConfigFile(cfg *SetupConfig) error {
 				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
 				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
 				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+				SessionCountWindowLimit  int           `yaml:"session_count_window_limit"`
+				SessionCountWindow       time.Duration `yaml:"session_count_window"`
 			} `yaml:"scheduling"`
 		} `yaml:"gateway"`
 		Default struct {
@@ -432,6 +436,8 @@ func writeConfigFile(cfg *SetupConfig) error {
 				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
 				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
 				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+				SessionCountWindowLimit  int           `yaml:"session_count_window_limit"`
+				SessionCountWindow       time.Duration `yaml:"session_count_window"`
 			} `yaml:"scheduling"`
 		}{
 			Scheduling: struct {
@@ -442,6 +448,8 @@ func writeConfigFile(cfg *SetupConfig) error {
 				FallbackMaxWaiting       int           `yaml:"fallback_max_waiting"`
 				LoadBatchEnabled         bool          `yaml:"load_batch_enabled"`
 				SlotCleanupInterval      time.Duration `yaml:"slot_cleanup_interval"`
+				SessionCountWindowLimit  int           `yaml:"session_count_window_limit"`
+				SessionCountWindow       time.Duration `yaml:"session_count_window"`
 			}{
 				StickySessionMaxWaiting:  cfg.Gateway.Scheduling.StickySessionMaxWaiting,
 				StickySessionWaitTimeout: cfg.Gateway.Scheduling.StickySessionWaitTimeout,
@@ -450,6 +458,8 @@ func writeConfigFile(cfg *SetupConfig) error {
 				FallbackMaxWaiting:       cfg.Gateway.Scheduling.FallbackMaxWaiting,
 				LoadBatchEnabled:         cfg.Gateway.Scheduling.LoadBatchEnabled,
 				SlotCleanupInterval:      cfg.Gateway.Scheduling.SlotCleanupInterval,
+				SessionCountWindowLimit:  cfg.Gateway.Scheduling.SessionCountWindowLimit,
+				SessionCountWindow:       cfg.Gateway.Scheduling.SessionCountWindow,
 			},
 		},
 		Default: struct {
@@ -587,6 +597,8 @@ func AutoSetupFromEnv() error {
 				FallbackMaxWaiting:       getEnvIntOrDefault("GATEWAY_SCHEDULING_FALLBACK_MAX_WAITING", 100),
 				LoadBatchEnabled:         getEnvBoolOrDefault("GATEWAY_SCHEDULING_LOAD_BATCH_ENABLED", true),
 				SlotCleanupInterval:      getEnvDurationOrDefault("GATEWAY_SCHEDULING_SLOT_CLEANUP_INTERVAL", 30*time.Second),
+				SessionCountWindowLimit:  getEnvIntOrDefault("GATEWAY_SCHEDULING_SESSION_COUNT_WINDOW_LIMIT", 100),
+				SessionCountWindow:       getEnvDurationOrDefault("GATEWAY_SCHEDULING_SESSION_COUNT_WINDOW", 1*time.Hour),
 			},
 		},
 		Timezone: tz,
