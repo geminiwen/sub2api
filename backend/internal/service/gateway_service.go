@@ -2348,23 +2348,25 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 		return true
 	}
 
-	maxSessions := account.GetMaxSessions()
-	if maxSessions <= 0 || sessionID == "" {
-		return true // 未启用会话限制或无会话ID
-	}
-
-	if s.sessionLimitCache == nil {
-		return true // 缓存不可用时允许通过
+	if sessionID == "" || s.sessionLimitCache == nil {
+		return true // 无会话ID或缓存不可用时允许通过
 	}
 
 	idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
 
-	allowed, err := s.sessionLimitCache.RegisterSession(ctx, account.ID, sessionID, maxSessions, idleTimeout)
-	if err != nil {
-		// 失败开放：缓存错误时允许通过
-		return true
+	maxSessions := account.GetMaxSessions()
+	if maxSessions > 0 {
+		// 启用会话限制：检查并注册
+		allowed, err := s.sessionLimitCache.RegisterSession(ctx, account.ID, sessionID, maxSessions, idleTimeout)
+		if err != nil {
+			return true // 失败开放
+		}
+		return allowed
 	}
-	return allowed
+
+	// 未启用会话限制：仅追踪，不限制，始终返回 true
+	_ = s.sessionLimitCache.TrackSession(ctx, account.ID, sessionID, idleTimeout)
+	return true
 }
 
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {

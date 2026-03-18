@@ -35,7 +35,7 @@
       </span>
     </div>
 
-    <!-- 会话数量限制（仅 Anthropic OAuth/SetupToken 且启用时显示） -->
+    <!-- 会话数量（Anthropic OAuth/SetupToken 账号显示） -->
     <div v-if="showSessionLimit" class="flex items-center gap-1">
       <span
         :class="[
@@ -48,8 +48,13 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
         </svg>
         <span class="font-mono">{{ activeSessions }}</span>
-        <span class="text-gray-400 dark:text-gray-500">/</span>
-        <span class="font-mono">{{ account.max_sessions }}</span>
+        <template v-if="hasSessionLimit">
+          <span class="text-gray-400 dark:text-gray-500">/</span>
+          <span class="font-mono">{{ account.max_sessions }}</span>
+        </template>
+        <template v-else>
+          <span class="text-[9px] opacity-60">sessions</span>
+        </template>
       </span>
     </div>
 
@@ -115,13 +120,21 @@ const showWindowCost = computed(() => {
 // 当前窗口费用
 const currentWindowCost = computed(() => props.account.current_window_cost ?? 0)
 
-// 是否显示会话限制
-const showSessionLimit = computed(() => {
+// 是否有会话限制（max_sessions > 0）
+const hasSessionLimit = computed(() => {
   return (
-    isAnthropicOAuthOrSetupToken.value &&
     props.account.max_sessions !== undefined &&
     props.account.max_sessions !== null &&
     props.account.max_sessions > 0
+  )
+})
+
+// 是否显示会话数（有活跃会话数据即显示）
+const showSessionLimit = computed(() => {
+  return (
+    isAnthropicOAuthOrSetupToken.value &&
+    props.account.active_sessions !== undefined &&
+    props.account.active_sessions !== null
   )
 })
 
@@ -183,6 +196,11 @@ const windowCostTooltip = computed(() => {
 const sessionLimitClass = computed(() => {
   if (!showSessionLimit.value) return ''
 
+  // 无限制时使用中性样式
+  if (!hasSessionLimit.value) {
+    return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+  }
+
   const current = activeSessions.value
   const max = props.account.max_sessions || 0
 
@@ -199,9 +217,14 @@ const sessionLimitClass = computed(() => {
 const sessionLimitTooltip = computed(() => {
   if (!showSessionLimit.value) return ''
 
+  const idle = props.account.session_idle_timeout_minutes || 5
+
+  if (!hasSessionLimit.value) {
+    return t('admin.accounts.capacity.sessions.trackOnly', { idle })
+  }
+
   const current = activeSessions.value
   const max = props.account.max_sessions || 0
-  const idle = props.account.session_idle_timeout_minutes || 5
 
   if (current >= max) {
     return t('admin.accounts.capacity.sessions.full', { idle })

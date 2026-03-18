@@ -29,6 +29,10 @@ type SessionLimitCache interface {
 	//   error: 操作错误
 	RegisterSession(ctx context.Context, accountID int64, sessionUUID string, maxSessions int, idleTimeout time.Duration) (allowed bool, err error)
 
+	// TrackSession 仅追踪会话活动，不检查限制
+	// 用于未设置 max_sessions 的账号，仅记录会话以供展示
+	TrackSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error
+
 	// RefreshSession 刷新现有会话的时间戳
 	// 用于活跃会话保持活动状态
 	RefreshSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error

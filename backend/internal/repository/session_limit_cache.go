@@ -77,6 +77,28 @@ var (
 		return 0
 	`)
 
+	// trackSessionScript 仅追踪会话活动，不检查上限
+	// KEYS[1] = session_limit:account:{accountID}
+	// ARGV[1] = idleTimeout（秒）
+	// ARGV[2] = sessionUUID
+	trackSessionScript = redis.NewScript(`
+		local key = KEYS[1]
+		local idleTimeout = tonumber(ARGV[1])
+		local sessionUUID = ARGV[2]
+
+		local timeResult = redis.call('TIME')
+		local now = tonumber(timeResult[1])
+		local expireBefore = now - idleTimeout
+
+		-- 清理过期会话
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+
+		-- 添加或更新会话时间戳
+		redis.call('ZADD', key, now, sessionUUID)
+		redis.call('EXPIRE', key, idleTimeout + 60)
+		return 1
+	`)
+
 	// refreshSessionScript 刷新会话时间戳
 	// KEYS[1] = session_limit:account:{accountID}
 	// ARGV[1] = idleTimeout（秒）
@@ -159,6 +181,7 @@ func NewSessionLimitCache(rdb *redis.Client, defaultIdleTimeoutMinutes int) serv
 	ctx := context.Background()
 	scripts := []*redis.Script{
 		registerSessionScript,
+		trackSessionScript,
 		refreshSessionScript,
 		getActiveSessionCountScript,
 		isSessionActiveScript,
@@ -202,6 +225,22 @@ func (c *sessionLimitCache) RegisterSession(ctx context.Context, accountID int64
 		return true, err // 失败开放：缓存错误时允许请求通过
 	}
 	return result == 1, nil
+}
+
+// TrackSession 仅追踪会话活动，不检查限制
+func (c *sessionLimitCache) TrackSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error {
+	if sessionUUID == "" {
+		return nil
+	}
+
+	key := sessionLimitKey(accountID)
+	idleTimeoutSeconds := int(idleTimeout.Seconds())
+	if idleTimeoutSeconds <= 0 {
+		idleTimeoutSeconds = int(c.defaultIdleTimeout.Seconds())
+	}
+
+	_, err := trackSessionScript.Run(ctx, c.rdb, []string{key}, idleTimeoutSeconds, sessionUUID).Int()
+	return err
 }
 
 // RefreshSession 刷新会话时间戳
