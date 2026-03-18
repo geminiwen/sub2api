@@ -112,6 +112,9 @@ type StubSessionLimitCache struct{}
 func (c StubSessionLimitCache) RegisterSession(_ context.Context, _ int64, _ string, _ int, _ time.Duration) (bool, error) {
 	return true, nil
 }
+func (c StubSessionLimitCache) TrackSession(_ context.Context, _ int64, _ string, _ time.Duration) error {
+	return nil
+}
 func (c StubSessionLimitCache) RefreshSession(_ context.Context, _ int64, _ string, _ time.Duration) error {
 	return nil
 }
