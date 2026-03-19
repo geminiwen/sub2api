@@ -349,7 +349,9 @@ const (
 	anthropicBillingHeaderPrefix = "x-anthropic-billing-header:"
 	claudeCodeBillingHashSalt    = "59cf53e54c78"
 	claudeCodeBillingEntrypoint  = "cli"
-	claudeCodeBillingCCH         = "00000"
+	claudeCodeBillingCCHSeed     = uint64(0x6e52736ac806831e)
+	claudeCodeBillingCCHMask     = uint64(0xfffff)
+	claudeCodeBillingCCHZero     = "00000"
 )
 
 // ErrNoAvailableAccounts 表示没有可用的账号
@@ -3755,10 +3757,7 @@ func resolveBillingHeaderCLIVersion(userAgent string) string {
 
 func extractFirstUserTextBlock(body []byte) string {
 	var req struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
+		Messages []json.RawMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return ""
@@ -3769,23 +3768,46 @@ func extractFirstUserTextBlock(body []byte) string {
 		Text string `json:"text"`
 	}
 
-	for _, msg := range req.Messages {
-		if msg.Role != "user" || len(msg.Content) == 0 {
-			continue
+	extractContentText := func(content json.RawMessage) string {
+		if len(content) == 0 {
+			return ""
 		}
-
 		var contentText string
-		if err := json.Unmarshal(msg.Content, &contentText); err == nil {
+		if err := json.Unmarshal(content, &contentText); err == nil {
 			return contentText
 		}
-
 		var blocks []textBlock
-		if err := json.Unmarshal(msg.Content, &blocks); err != nil {
-			continue
+		if err := json.Unmarshal(content, &blocks); err != nil {
+			return ""
 		}
 		for _, block := range blocks {
 			if block.Type == "text" && block.Text != "" {
 				return block.Text
+			}
+		}
+		return ""
+	}
+
+	for _, rawMsg := range req.Messages {
+		var apiShape struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(rawMsg, &apiShape); err == nil && apiShape.Role == "user" {
+			if text := extractContentText(apiShape.Content); text != "" {
+				return text
+			}
+		}
+
+		var originShape struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(rawMsg, &originShape); err == nil && originShape.Type == "user" {
+			if text := extractContentText(originShape.Message.Content); text != "" {
+				return text
 			}
 		}
 	}
@@ -3807,12 +3829,23 @@ func buildAnthropicBillingHeader(body []byte, userAgent string) string {
 
 	sum := sha256.Sum256([]byte(claudeCodeBillingHashSalt + picked.String() + version))
 	ccVersion := fmt.Sprintf("%s.%x", version, sum[:])[:len(version)+4]
-	return fmt.Sprintf("%s cc_version=%s; cc_entrypoint=%s; cch=%s;", anthropicBillingHeaderPrefix, ccVersion, claudeCodeBillingEntrypoint, claudeCodeBillingCCH)
+	return fmt.Sprintf("%s cc_version=%s; cc_entrypoint=%s; cch=%s;", anthropicBillingHeaderPrefix, ccVersion, claudeCodeBillingEntrypoint, claudeCodeBillingCCHZero)
+}
+
+func applyAnthropicBillingCCH(body []byte, requestPath string) []byte {
+	if !strings.Contains(requestPath, "/v1/messages") || !bytes.Contains(body, []byte("cch="+claudeCodeBillingCCHZero)) {
+		return body
+	}
+
+	h := xxhash.NewWithSeed(claudeCodeBillingCCHSeed)
+	_, _ = h.Write(body)
+	cch := fmt.Sprintf("%05x", h.Sum64()&claudeCodeBillingCCHMask)
+	return bytes.Replace(body, []byte("cch="+claudeCodeBillingCCHZero), []byte("cch="+cch), 1)
 }
 
 // upsertAnthropicBillingHeaderSystemBlock 在 system 中覆盖/补齐 x-anthropic-billing-header。
 // 直接从 body 解析并回写 system，不依赖外部传入的 parsed.System（因为前置步骤可能已修改 body）。
-func upsertAnthropicBillingHeaderSystemBlock(body []byte, userAgent string) []byte {
+func upsertAnthropicBillingHeaderSystemBlock(body []byte, userAgent string, requestPath string) []byte {
 	if len(body) == 0 {
 		return body
 	}
@@ -4200,10 +4233,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// 放在 inject/normalize 之后，确保使用最终请求体计算 cc_version 并覆盖旧值。
 	if account.IsOAuth() {
 		userAgent := claude.DefaultHeaders["User-Agent"]
+		requestPath := ""
+		if c != nil && c.Request != nil && c.Request.URL != nil {
+			requestPath = c.Request.URL.Path
+		}
 		if oauthFingerprint != nil && strings.TrimSpace(oauthFingerprint.UserAgent) != "" {
 			userAgent = oauthFingerprint.UserAgent
 		}
-		body = upsertAnthropicBillingHeaderSystemBlock(body, userAgent)
+		body = upsertAnthropicBillingHeaderSystemBlock(body, userAgent, requestPath)
 	}
 
 	// 强制执行 cache_control 块数量限制（最多 4 个）
@@ -5725,6 +5762,14 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 				}
 			}
 		}
+	}
+
+	if account.IsOAuth() {
+		requestPath := ""
+		if c != nil && c.Request != nil && c.Request.URL != nil {
+			requestPath = c.Request.URL.Path
+		}
+		body = applyAnthropicBillingCCH(body, requestPath)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
