@@ -340,10 +340,17 @@ var (
 )
 
 // systemBlockFilterPrefixes 需要从 system 中过滤的文本前缀列表
-// OAuth/SetupToken 账号转发时，匹配这些前缀的 system 元素会被移除
+// OAuth/SetupToken 账号转发时，匹配这些前缀的 system 元素会被覆盖为网关生成的值
 var systemBlockFilterPrefixes = []string{
 	"x-anthropic-billing-header",
 }
+
+const (
+	anthropicBillingHeaderPrefix = "x-anthropic-billing-header:"
+	claudeCodeBillingHashSalt    = "59cf53e54c78"
+	claudeCodeBillingEntrypoint  = "cli"
+	claudeCodeBillingCCH         = "00000"
+)
 
 // ErrNoAvailableAccounts 表示没有可用的账号
 var ErrNoAvailableAccounts = errors.New("no available accounts")
@@ -3686,9 +3693,15 @@ func matchesFilterPrefix(text string) bool {
 	return false
 }
 
-// filterSystemBlocksByPrefix 从 body 的 system 中移除文本匹配 systemBlockFilterPrefixes 前缀的元素
-// 直接从 body 解析 system，不依赖外部传入的 parsed.System（因为前置步骤可能已修改 body 中的 system）
-func filterSystemBlocksByPrefix(body []byte) []byte {
+func shouldInjectAnthropicBillingHeader(userAgent string) bool {
+	version := ExtractCLIVersion(userAgent)
+	if version == "" {
+		return false
+	}
+	return CompareVersions(version, NewMetadataFormatMinVersion) >= 0
+}
+
+func removeSystemBlocksByPrefix(body []byte) []byte {
 	sys := gjson.GetBytes(body, "system")
 	if !sys.Exists() {
 		return body
@@ -3728,6 +3741,135 @@ func filterSystemBlocksByPrefix(body []byte) []byte {
 		}
 	}
 	return body
+}
+
+func resolveBillingHeaderCLIVersion(userAgent string) string {
+	if version := ExtractCLIVersion(userAgent); version != "" {
+		return version
+	}
+	if version := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"]); version != "" {
+		return version
+	}
+	return "2.1.79"
+}
+
+func extractFirstUserTextBlock(body []byte) string {
+	var req struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+
+	type textBlock struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+
+	for _, msg := range req.Messages {
+		if msg.Role != "user" || len(msg.Content) == 0 {
+			continue
+		}
+
+		var contentText string
+		if err := json.Unmarshal(msg.Content, &contentText); err == nil {
+			return contentText
+		}
+
+		var blocks []textBlock
+		if err := json.Unmarshal(msg.Content, &blocks); err != nil {
+			continue
+		}
+		for _, block := range blocks {
+			if block.Type == "text" && block.Text != "" {
+				return block.Text
+			}
+		}
+	}
+	return ""
+}
+
+func buildAnthropicBillingHeader(body []byte, userAgent string) string {
+	version := resolveBillingHeaderCLIVersion(userAgent)
+	firstUserText := extractFirstUserTextBlock(body)
+
+	var picked strings.Builder
+	for _, idx := range []int{4, 7, 20} {
+		if idx >= 0 && idx < len(firstUserText) {
+			picked.WriteByte(firstUserText[idx])
+		} else {
+			picked.WriteByte('0')
+		}
+	}
+
+	sum := sha256.Sum256([]byte(claudeCodeBillingHashSalt + picked.String() + version))
+	ccVersion := fmt.Sprintf("%s.%x", version, sum[:])[:len(version)+4]
+	return fmt.Sprintf("%s cc_version=%s; cc_entrypoint=%s; cch=%s;", anthropicBillingHeaderPrefix, ccVersion, claudeCodeBillingEntrypoint, claudeCodeBillingCCH)
+}
+
+// upsertAnthropicBillingHeaderSystemBlock 在 system 中覆盖/补齐 x-anthropic-billing-header。
+// 直接从 body 解析并回写 system，不依赖外部传入的 parsed.System（因为前置步骤可能已修改 body）。
+func upsertAnthropicBillingHeaderSystemBlock(body []byte, userAgent string) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	if !shouldInjectAnthropicBillingHeader(userAgent) {
+		return removeSystemBlocksByPrefix(body)
+	}
+
+	billingBlock := map[string]any{
+		"type": "text",
+		"text": buildAnthropicBillingHeader(body, userAgent),
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+
+	switch system := req["system"].(type) {
+	case nil:
+		return body
+	case string:
+		if matchesFilterPrefix(strings.TrimSpace(system)) {
+			req["system"] = []any{billingBlock}
+		} else {
+			return body
+		}
+	case []any:
+		filtered := make([]any, 0, len(system))
+		insertAt := -1
+		for _, item := range system {
+			block, ok := item.(map[string]any)
+			if ok {
+				if text, ok := block["text"].(string); ok && matchesFilterPrefix(text) {
+					if insertAt == -1 {
+						insertAt = len(filtered)
+					}
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		if insertAt == -1 {
+			return body
+		}
+		rebuilt := make([]any, 0, len(filtered)+1)
+		rebuilt = append(rebuilt, filtered[:insertAt]...)
+		rebuilt = append(rebuilt, billingBlock)
+		rebuilt = append(rebuilt, filtered[insertAt:]...)
+		req["system"] = rebuilt
+	default:
+		return body
+	}
+	result, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return result
 }
 
 // injectClaudeCodePrompt 在 system 开头注入 Claude Code 提示词
@@ -4023,6 +4165,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	isClaudeCode := isClaudeCodeRequest(ctx, c, parsed)
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	var oauthFingerprint *Fingerprint
+
+	if account.IsOAuth() && s.identityService != nil {
+		headers := http.Header{}
+		if c != nil && c.Request != nil {
+			headers = c.Request.Header
+		}
+		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, headers); err == nil && fp != nil {
+			oauthFingerprint = fp
+		}
+	}
 
 	if shouldMimicClaudeCode {
 		// 智能注入 Claude Code 系统提示词（仅 OAuth/SetupToken 账号需要）
@@ -4033,23 +4186,24 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
-		if s.identityService != nil {
-			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
-			if err == nil && fp != nil {
-				if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
-					normalizeOpts.injectMetadata = true
-					normalizeOpts.metadataUserID = metadataUserID
-				}
+		if oauthFingerprint != nil {
+			if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, oauthFingerprint); metadataUserID != "" {
+				normalizeOpts.injectMetadata = true
+				normalizeOpts.metadataUserID = metadataUserID
 			}
 		}
 
 		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
 	}
 
-	// OAuth/SetupToken 账号：移除黑名单前缀匹配的 system 元素（如客户端注入的计费元数据）
-	// 放在 inject/normalize 之后，确保不会被覆盖
+	// OAuth/SetupToken 账号：覆盖/补齐 billing system block。
+	// 放在 inject/normalize 之后，确保使用最终请求体计算 cc_version 并覆盖旧值。
 	if account.IsOAuth() {
-		body = filterSystemBlocksByPrefix(body)
+		userAgent := claude.DefaultHeaders["User-Agent"]
+		if oauthFingerprint != nil && strings.TrimSpace(oauthFingerprint.UserAgent) != "" {
+			userAgent = oauthFingerprint.UserAgent
+		}
+		body = upsertAnthropicBillingHeaderSystemBlock(body, userAgent)
 	}
 
 	// 强制执行 cache_control 块数量限制（最多 4 个）
@@ -5735,6 +5889,7 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request, isStream bool) {
 	if req.Header.Get("accept") == "" {
 		req.Header.Set("accept", "application/json")
 	}
+	req.Header.Set("accept-encoding", "br, gzip, deflate")
 	for key, value := range claude.DefaultHeaders {
 		if value == "" {
 			continue

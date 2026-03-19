@@ -686,6 +686,7 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.NoError(t, err)
 	require.Equal(t, "Bearer oauth-token", req.Header.Get("authorization"))
 	require.Contains(t, req.Header.Get("anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
+	require.Equal(t, "br, gzip, deflate", req.Header.Get("accept-encoding"))
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {

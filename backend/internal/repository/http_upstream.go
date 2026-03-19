@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+	"github.com/andybalholm/brotli"
 )
 
 // 默认配置常量
@@ -143,6 +147,13 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 
+	if err := decodeResponseBody(resp); err != nil {
+		atomic.AddInt64(&entry.inFlight, -1)
+		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		_ = resp.Body.Close()
+		return nil, err
+	}
+
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
 	resp.Body = wrapTrackedBody(resp.Body, func() {
@@ -216,6 +227,14 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
+	if err := decodeResponseBody(resp); err != nil {
+		atomic.AddInt64(&entry.inFlight, -1)
+		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		_ = resp.Body.Close()
+		slog.Debug("tls_fingerprint_decode_failed", "account_id", accountID, "error", err)
+		return nil, err
+	}
+
 	slog.Debug("tls_fingerprint_request_success", "account_id", accountID, "status", resp.StatusCode)
 
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
@@ -225,6 +244,101 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	})
 
 	return resp, nil
+}
+
+type decoderReadCloser struct {
+	io.Reader
+	closeFn func() error
+}
+
+func (d *decoderReadCloser) Close() error {
+	if d.closeFn != nil {
+		return d.closeFn()
+	}
+	return nil
+}
+
+func decodeResponseBody(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+
+	rawEncoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	if rawEncoding == "" {
+		return nil
+	}
+
+	parts := strings.Split(rawEncoding, ",")
+	encodings := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if enc := strings.ToLower(strings.TrimSpace(part)); enc != "" && enc != "identity" {
+			encodings = append(encodings, enc)
+		}
+	}
+	if len(encodings) == 0 {
+		return nil
+	}
+
+	current := resp.Body
+	for i := len(encodings) - 1; i >= 0; i-- {
+		next, err := wrapDecoder(current, encodings[i])
+		if err != nil {
+			return fmt.Errorf("decode upstream response (%s): %w", encodings[i], err)
+		}
+		current = next
+	}
+
+	resp.Body = current
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	resp.Uncompressed = true
+	return nil
+}
+
+func wrapDecoder(body io.ReadCloser, encoding string) (io.ReadCloser, error) {
+	switch encoding {
+	case "gzip", "x-gzip":
+		reader, err := gzip.NewReader(body)
+		if err != nil {
+			return nil, err
+		}
+		return &decoderReadCloser{
+			Reader: reader,
+			closeFn: func() error {
+				_ = reader.Close()
+				return body.Close()
+			},
+		}, nil
+	case "deflate":
+		reader, err := zlib.NewReader(body)
+		if err == nil {
+			return &decoderReadCloser{
+				Reader: reader,
+				closeFn: func() error {
+					_ = reader.Close()
+					return body.Close()
+				},
+			}, nil
+		}
+
+		flateReader := flate.NewReader(body)
+		return &decoderReadCloser{
+			Reader: flateReader,
+			closeFn: func() error {
+				_ = flateReader.Close()
+				return body.Close()
+			},
+		}, nil
+	case "br":
+		reader := brotli.NewReader(body)
+		return &decoderReadCloser{
+			Reader:  reader,
+			closeFn: body.Close,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported content encoding %q", encoding)
+	}
 }
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端

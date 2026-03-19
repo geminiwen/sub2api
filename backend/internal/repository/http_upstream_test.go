@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -8,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/andybalholm/brotli"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -167,6 +171,69 @@ func (s *HTTPUpstreamSuite) TestDo_EmptyProxy_UsesDirect() {
 	require.Equal(s.T(), "direct-empty", string(b))
 }
 
+func (s *HTTPUpstreamSuite) TestDo_DecodesGzipResponse() {
+	payload := compressWithGzip(s.T(), []byte("gzip-body"))
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(payload)
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	up := NewHTTPUpstream(s.cfg)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/gzip", nil)
+	require.NoError(s.T(), err)
+	resp, err := up.Do(req, "", 1, 1)
+	require.NoError(s.T(), err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "gzip-body", string(body))
+	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
+}
+
+func (s *HTTPUpstreamSuite) TestDo_DecodesDeflateResponse() {
+	payload := compressWithDeflate(s.T(), []byte("deflate-body"))
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "deflate")
+		_, _ = w.Write(payload)
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	up := NewHTTPUpstream(s.cfg)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/deflate", nil)
+	require.NoError(s.T(), err)
+	resp, err := up.Do(req, "", 1, 1)
+	require.NoError(s.T(), err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "deflate-body", string(body))
+	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
+}
+
+func (s *HTTPUpstreamSuite) TestDo_DecodesBrotliResponse() {
+	payload := compressWithBrotli([]byte("brotli-body"))
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "br")
+		_, _ = w.Write(payload)
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	up := NewHTTPUpstream(s.cfg)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/br", nil)
+	require.NoError(s.T(), err)
+	resp, err := up.Do(req, "", 1, 1)
+	require.NoError(s.T(), err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "brotli-body", string(body))
+	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
+}
+
 // TestAccountIsolation_DifferentAccounts 测试账户隔离模式
 // 验证不同账户使用独立的连接池
 func (s *HTTPUpstreamSuite) TestAccountIsolation_DifferentAccounts() {
@@ -298,4 +365,32 @@ func hasEntry(svc *httpUpstreamService, target *upstreamClientEntry) bool {
 		}
 	}
 	return false
+}
+
+func compressWithGzip(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	_, err := w.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+func compressWithDeflate(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	_, err := w.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+func compressWithBrotli(payload []byte) []byte {
+	var buf bytes.Buffer
+	w := brotli.NewWriter(&buf)
+	_, _ = w.Write(payload)
+	_ = w.Close()
+	return buf.Bytes()
 }
