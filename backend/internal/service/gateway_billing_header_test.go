@@ -159,7 +159,7 @@ func TestApplyAnthropicBillingCCH_FillsPlaceholderForMessagesPath(t *testing.T) 
 	require.Equal(t, `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.79.04b; cc_entrypoint=cli; cch=ad29d;"}],"messages":[{"role":"user","content":[{"type":"text","text":"0000t00-000000000000e"}]}]}`, string(updated))
 }
 
-func TestApplyAnthropicBillingCCH_MatchesPythonFixture(t *testing.T) {
+func TestApplyAnthropicBillingCCH_MatchesFixture(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.79.04b; cc_entrypoint=sdk-cli; cch=00000;"}],"stream":false}`)
 
 	updated := applyAnthropicBillingCCH(body, "/v1/messages")
