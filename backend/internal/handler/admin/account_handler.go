@@ -161,7 +161,7 @@ type AccountWithConcurrency struct {
 	CurrentConcurrency int `json:"current_concurrency"`
 	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
-	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
+	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 有上限账号=当前活跃会话数；无上限账号=最近5h会话数
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
 }
 
@@ -190,9 +190,15 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 		}
 
 		if h.sessionLimitCache != nil {
-			idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
-			idleTimeouts := map[int64]time.Duration{account.ID: idleTimeout}
-			if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, []int64{account.ID}, idleTimeouts); err == nil {
+			if account.GetMaxSessions() > 0 {
+				idleTimeout := time.Duration(account.GetSessionIdleTimeoutMinutes()) * time.Minute
+				idleTimeouts := map[int64]time.Duration{account.ID: idleTimeout}
+				if sessions, err := h.sessionLimitCache.GetActiveSessionCountBatch(ctx, []int64{account.ID}, idleTimeouts); err == nil {
+					if count, ok := sessions[account.ID]; ok {
+						item.ActiveSessions = &count
+					}
+				}
+			} else if sessions, err := h.sessionLimitCache.GetTrackedSessionCountBatch(ctx, []int64{account.ID}); err == nil {
 				if count, ok := sessions[account.ID]; ok {
 					item.ActiveSessions = &count
 				}
@@ -256,6 +262,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 	// 识别需要查询窗口费用、会话数和 RPM 的账号（Anthropic OAuth/SetupToken 且启用了相应功能）
 	windowCostAccountIDs := make([]int64, 0)
 	sessionLimitAccountIDs := make([]int64, 0)
+	trackedSessionAccountIDs := make([]int64, 0)
 	rpmAccountIDs := make([]int64, 0)
 	sessionIdleTimeouts := make(map[int64]time.Duration) // 各账号的会话空闲超时配置
 	for i := range accounts {
@@ -264,8 +271,12 @@ func (h *AccountHandler) List(c *gin.Context) {
 			if acc.GetWindowCostLimit() > 0 {
 				windowCostAccountIDs = append(windowCostAccountIDs, acc.ID)
 			}
-			sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
-			sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
+			if acc.GetMaxSessions() > 0 {
+				sessionLimitAccountIDs = append(sessionLimitAccountIDs, acc.ID)
+				sessionIdleTimeouts[acc.ID] = time.Duration(acc.GetSessionIdleTimeoutMinutes()) * time.Minute
+			} else {
+				trackedSessionAccountIDs = append(trackedSessionAccountIDs, acc.ID)
+			}
 			if acc.GetBaseRPM() > 0 {
 				rpmAccountIDs = append(rpmAccountIDs, acc.ID)
 			}
@@ -285,6 +296,15 @@ func (h *AccountHandler) List(c *gin.Context) {
 		activeSessions, _ = h.sessionLimitCache.GetActiveSessionCountBatch(c.Request.Context(), sessionLimitAccountIDs, sessionIdleTimeouts)
 		if activeSessions == nil {
 			activeSessions = make(map[int64]int)
+		}
+	}
+	if len(trackedSessionAccountIDs) > 0 && h.sessionLimitCache != nil {
+		trackedSessions, _ := h.sessionLimitCache.GetTrackedSessionCountBatch(c.Request.Context(), trackedSessionAccountIDs)
+		if activeSessions == nil {
+			activeSessions = make(map[int64]int)
+		}
+		for accountID, count := range trackedSessions {
+			activeSessions[accountID] = count
 		}
 	}
 

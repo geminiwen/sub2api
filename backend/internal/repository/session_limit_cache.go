@@ -25,12 +25,19 @@ const (
 	// 格式: session_limit:account:{accountID}
 	sessionLimitKeyPrefix = "session_limit:account:"
 
+	// 会话追踪键前缀
+	// 格式: session_track:account:{accountID}
+	trackedSessionKeyPrefix = "session_track:account:"
+
 	// 窗口费用缓存键前缀
 	// 格式: window_cost:account:{accountID}
 	windowCostKeyPrefix = "window_cost:account:"
 
 	// 窗口费用缓存 TTL（30秒）
 	windowCostCacheTTL = 30 * time.Second
+
+	// 无会话上限账号的追踪窗口固定为 5 小时
+	trackedSessionWindow = 5 * time.Hour
 )
 
 var (
@@ -203,6 +210,11 @@ func sessionLimitKey(accountID int64) string {
 	return fmt.Sprintf("%s%d", sessionLimitKeyPrefix, accountID)
 }
 
+// trackedSessionKey 生成会话追踪的 Redis 键
+func trackedSessionKey(accountID int64) string {
+	return fmt.Sprintf("%s%d", trackedSessionKeyPrefix, accountID)
+}
+
 // windowCostKey 生成窗口费用缓存的 Redis 键
 func windowCostKey(accountID int64) string {
 	return fmt.Sprintf("%s%d", windowCostKeyPrefix, accountID)
@@ -227,19 +239,16 @@ func (c *sessionLimitCache) RegisterSession(ctx context.Context, accountID int64
 	return result == 1, nil
 }
 
-// TrackSession 仅追踪会话活动，不检查限制
-func (c *sessionLimitCache) TrackSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error {
+// TrackSession 仅追踪最近 5 小时内的会话活动，不检查限制
+func (c *sessionLimitCache) TrackSession(ctx context.Context, accountID int64, sessionUUID string) error {
 	if sessionUUID == "" {
 		return nil
 	}
 
-	key := sessionLimitKey(accountID)
-	idleTimeoutSeconds := int(idleTimeout.Seconds())
-	if idleTimeoutSeconds <= 0 {
-		idleTimeoutSeconds = int(c.defaultIdleTimeout.Seconds())
-	}
+	key := trackedSessionKey(accountID)
+	windowSeconds := int(trackedSessionWindow.Seconds())
 
-	_, err := trackSessionScript.Run(ctx, c.rdb, []string{key}, idleTimeoutSeconds, sessionUUID).Int()
+	_, err := trackSessionScript.Run(ctx, c.rdb, []string{key}, windowSeconds, sessionUUID).Int()
 	return err
 }
 
@@ -297,6 +306,45 @@ func (c *sessionLimitCache) GetActiveSessionCountBatch(ctx context.Context, acco
 	}
 
 	// 执行 pipeline，即使部分失败也尝试获取成功的结果
+	_, _ = pipe.Exec(ctx)
+
+	for accountID, cmd := range cmds {
+		if result, err := cmd.Int(); err == nil {
+			results[accountID] = result
+		}
+	}
+
+	return results, nil
+}
+
+// GetTrackedSessionCount 获取最近 5 小时内追踪到的会话数
+func (c *sessionLimitCache) GetTrackedSessionCount(ctx context.Context, accountID int64) (int, error) {
+	key := trackedSessionKey(accountID)
+	windowSeconds := int(trackedSessionWindow.Seconds())
+
+	result, err := getActiveSessionCountScript.Run(ctx, c.rdb, []string{key}, windowSeconds).Int()
+	if err != nil {
+		return 0, err
+	}
+	return result, nil
+}
+
+// GetTrackedSessionCountBatch 批量获取最近 5 小时内追踪到的会话数
+func (c *sessionLimitCache) GetTrackedSessionCountBatch(ctx context.Context, accountIDs []int64) (map[int64]int, error) {
+	if len(accountIDs) == 0 {
+		return make(map[int64]int), nil
+	}
+
+	results := make(map[int64]int, len(accountIDs))
+	pipe := c.rdb.Pipeline()
+	cmds := make(map[int64]*redis.Cmd, len(accountIDs))
+	windowSeconds := int(trackedSessionWindow.Seconds())
+
+	for _, accountID := range accountIDs {
+		key := trackedSessionKey(accountID)
+		cmds[accountID] = getActiveSessionCountScript.Run(ctx, pipe, []string{key}, windowSeconds)
+	}
+
 	_, _ = pipe.Exec(ctx)
 
 	for accountID, cmd := range cmds {

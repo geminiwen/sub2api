@@ -2364,8 +2364,8 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 		return allowed
 	}
 
-	// 未启用会话限制：仅追踪，不限制，始终返回 true
-	_ = s.sessionLimitCache.TrackSession(ctx, account.ID, sessionID, idleTimeout)
+	// 未启用会话限制：仅追踪最近 5 小时内的会话，不限制，始终返回 true
+	_ = s.sessionLimitCache.TrackSession(ctx, account.ID, sessionID)
 	return true
 }
 

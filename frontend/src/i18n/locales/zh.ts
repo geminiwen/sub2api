@@ -2006,7 +2006,7 @@ export default {
         sessions: {
           full: '活跃会话已满，新会话需等待（空闲超时：{idle}分钟）',
           normal: '活跃会话正常（空闲超时：{idle}分钟）',
-          trackOnly: '{idle}分钟窗口内的活跃会话数（无限制）'
+          trackOnly: '最近5小时内的会话数'
         },
         rpm: {
           full: '已达 RPM 上限',

@@ -53,7 +53,7 @@
           <span class="font-mono">{{ account.max_sessions }}</span>
         </template>
         <template v-else>
-          <span class="text-[9px] opacity-60">sessions</span>
+          <span class="text-[9px] opacity-60">5h</span>
         </template>
       </span>
     </div>
@@ -129,7 +129,7 @@ const hasSessionLimit = computed(() => {
   )
 })
 
-// 是否显示会话数（有活跃会话数据即显示）
+// 是否显示会话数（有会话统计数据时显示）
 const showSessionLimit = computed(() => {
   return (
     isAnthropicOAuthOrSetupToken.value &&
@@ -220,7 +220,7 @@ const sessionLimitTooltip = computed(() => {
   const idle = props.account.session_idle_timeout_minutes || 5
 
   if (!hasSessionLimit.value) {
-    return t('admin.accounts.capacity.sessions.trackOnly', { idle })
+    return t('admin.accounts.capacity.sessions.trackOnly')
   }
 
   const current = activeSessions.value

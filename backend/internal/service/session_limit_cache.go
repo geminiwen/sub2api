@@ -30,8 +30,8 @@ type SessionLimitCache interface {
 	RegisterSession(ctx context.Context, accountID int64, sessionUUID string, maxSessions int, idleTimeout time.Duration) (allowed bool, err error)
 
 	// TrackSession 仅追踪会话活动，不检查限制
-	// 用于未设置 max_sessions 的账号，仅记录会话以供展示
-	TrackSession(ctx context.Context, accountID int64, sessionUUID string, idleTimeout time.Duration) error
+	// 用于未设置 max_sessions 的账号，仅记录最近 5 小时内出现过的会话以供展示
+	TrackSession(ctx context.Context, accountID int64, sessionUUID string) error
 
 	// RefreshSession 刷新现有会话的时间戳
 	// 用于活跃会话保持活动状态
@@ -45,6 +45,12 @@ type SessionLimitCache interface {
 	// idleTimeouts: 每个账号的空闲超时时间配置，key 为 accountID；若为 nil 或某账号不在其中，则使用默认超时
 	// 返回 map[accountID]count，查询失败的账号不在 map 中
 	GetActiveSessionCountBatch(ctx context.Context, accountIDs []int64, idleTimeouts map[int64]time.Duration) (map[int64]int, error)
+
+	// GetTrackedSessionCount 获取最近 5 小时内追踪到的会话数
+	GetTrackedSessionCount(ctx context.Context, accountID int64) (int, error)
+
+	// GetTrackedSessionCountBatch 批量获取最近 5 小时内追踪到的会话数
+	GetTrackedSessionCountBatch(ctx context.Context, accountIDs []int64) (map[int64]int, error)
 
 	// IsSessionActive 检查特定会话是否活跃（未过期）
 	IsSessionActive(ctx context.Context, accountID int64, sessionUUID string) (bool, error)
