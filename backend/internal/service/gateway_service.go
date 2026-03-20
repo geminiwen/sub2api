@@ -1172,6 +1172,67 @@ func moveTopLevelJSONFieldAfter(body []byte, field string, anchor string) []byte
 	return out.Bytes()
 }
 
+func moveAnthropicCacheControlAfterText(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	out := body
+	modified := false
+
+	system := gjson.GetBytes(out, "system")
+	if system.IsArray() {
+		system.ForEach(func(key, item gjson.Result) bool {
+			index := int(key.Int())
+			if !item.Get("cache_control").Exists() || !item.Get("text").Exists() {
+				return true
+			}
+			updated := moveTopLevelJSONFieldAfter([]byte(item.Raw), "cache_control", "text")
+			if bytes.Equal(updated, []byte(item.Raw)) {
+				return true
+			}
+			if next, ok := setJSONRawBytes(out, fmt.Sprintf("system.%d", index), updated); ok {
+				out = next
+				modified = true
+			}
+			return true
+		})
+	}
+
+	messages := gjson.GetBytes(out, "messages")
+	if messages.IsArray() {
+		messages.ForEach(func(msgKey, msg gjson.Result) bool {
+			msgIndex := int(msgKey.Int())
+			content := msg.Get("content")
+			if !content.IsArray() {
+				return true
+			}
+			content.ForEach(func(contentKey, item gjson.Result) bool {
+				contentIndex := int(contentKey.Int())
+				if !item.Get("cache_control").Exists() || !item.Get("text").Exists() {
+					return true
+				}
+				updated := moveTopLevelJSONFieldAfter([]byte(item.Raw), "cache_control", "text")
+				if bytes.Equal(updated, []byte(item.Raw)) {
+					return true
+				}
+				path := fmt.Sprintf("messages.%d.content.%d", msgIndex, contentIndex)
+				if next, ok := setJSONRawBytes(out, path, updated); ok {
+					out = next
+					modified = true
+				}
+				return true
+			})
+			return true
+		})
+	}
+
+	if modified {
+		return out
+	}
+	return body
+}
+
 func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAuthNormalizeOptions) ([]byte, string) {
 	if len(body) == 0 {
 		return body, modelID
@@ -6002,6 +6063,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 
 	if account.IsOAuth() {
 		body = moveTopLevelJSONFieldAfter(body, "stream", "system")
+		body = moveAnthropicCacheControlAfterText(body)
 		requestPath := ""
 		if c != nil && c.Request != nil && c.Request.URL != nil {
 			requestPath = c.Request.URL.Path
@@ -8648,6 +8710,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		}
 	}
 	body = moveTopLevelJSONFieldAfter(body, "stream", "system")
+	body = moveAnthropicCacheControlAfterText(body)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {

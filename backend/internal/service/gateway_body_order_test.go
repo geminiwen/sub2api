@@ -70,3 +70,14 @@ func TestEnforceCacheControlLimit_PreservesTopLevelFieldOrder(t *testing.T) {
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"system"`, `"messages"`, `"omega"`)
 	require.Equal(t, 4, strings.Count(resultStr, `"cache_control"`))
 }
+
+func TestMoveAnthropicCacheControlAfterText_ReordersNestedBlocks(t *testing.T) {
+	body := []byte(`{"system":[{"type":"text","cache_control":{"type":"ephemeral"},"text":"s1"}],"messages":[{"role":"user","content":[{"type":"text","cache_control":{"type":"ephemeral"},"text":"m1"},{"type":"tool_use","id":"tool_1","input":{}}]}]}`)
+
+	result := moveAnthropicCacheControlAfterText(body)
+	resultStr := string(result)
+
+	require.Contains(t, resultStr, `{"type":"text","text":"s1","cache_control":{"type":"ephemeral"}}`)
+	require.Contains(t, resultStr, `{"type":"text","text":"m1","cache_control":{"type":"ephemeral"}}`)
+	require.Contains(t, resultStr, `{"type":"tool_use","id":"tool_1","input":{}}`)
+}
