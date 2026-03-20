@@ -4595,6 +4595,7 @@ export default {
       betaPolicy: {
         title: 'Beta 策略',
         description: '配置转发 Anthropic API 请求时如何处理 Beta 特性。仅适用于 /v1/messages 接口。',
+        anthropicOAuthNotice: '提示：Beta 策略对 Anthropic OAuth 账号不生效。',
         action: '处理方式',
         actionPass: '透传（不处理）',
         actionFilter: '过滤（移除）',

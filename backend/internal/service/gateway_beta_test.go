@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
 	"github.com/gin-gonic/gin"
@@ -228,6 +230,90 @@ func TestDefaultBetaPolicySettings_DoesNotFilterContext1M(t *testing.T) {
 	for _, rule := range settings.Rules {
 		require.NotEqual(t, claude.BetaContext1M, rule.BetaToken)
 	}
+}
+
+func TestEvaluateBetaPolicy_AnthropicOAuthBypassesRules(t *testing.T) {
+	settings := &BetaPolicySettings{
+		Rules: []BetaPolicyRule{
+			{
+				BetaToken:    claude.BetaFastMode,
+				Action:       BetaPolicyActionBlock,
+				Scope:        BetaPolicyScopeAll,
+				ErrorMessage: "fast mode blocked",
+			},
+			{
+				BetaToken: claude.BetaContext1M,
+				Action:    BetaPolicyActionFilter,
+				Scope:     BetaPolicyScopeAll,
+			},
+		},
+	}
+	raw, err := json.Marshal(settings)
+	require.NoError(t, err)
+
+	svc := &GatewayService{
+		settingService: NewSettingService(
+			&betaPolicySettingRepoStub{values: map[string]string{
+				SettingKeyBetaPolicySettings: string(raw),
+			}},
+			&config.Config{},
+		),
+	}
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	policy := svc.evaluateBetaPolicy(
+		context.Background(),
+		claude.BetaFastMode+","+claude.BetaContext1M,
+		account,
+	)
+
+	require.Nil(t, policy.blockErr)
+	require.Empty(t, policy.filterSet)
+}
+
+func TestBuildUpstreamRequest_AnthropicOAuthBypassesBetaPolicyFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	settings := &BetaPolicySettings{
+		Rules: []BetaPolicyRule{
+			{
+				BetaToken: claude.BetaFastMode,
+				Action:    BetaPolicyActionFilter,
+				Scope:     BetaPolicyScopeAll,
+			},
+		},
+	}
+	raw, err := json.Marshal(settings)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("anthropic-beta", claude.BetaFastMode)
+
+	svc := &GatewayService{
+		settingService: NewSettingService(
+			&betaPolicySettingRepoStub{values: map[string]string{
+				SettingKeyBetaPolicySettings: string(raw),
+			}},
+			&config.Config{},
+		),
+	}
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	req, err := svc.buildUpstreamRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-5",
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	require.Contains(t, testHeaderValue(req.Header, "anthropic-beta"), claude.BetaFastMode)
 }
 
 func TestMergeAnthropicBeta(t *testing.T) {

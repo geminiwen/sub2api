@@ -4514,8 +4514,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 
 	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
-	// Always overwrite the cache to prevent stale values from a previous retry with a different account.
-	if account.Platform == PlatformAnthropic && c != nil {
+	// Anthropic OAuth accounts bypass beta policy entirely.
+	if account.Platform == PlatformAnthropic && c != nil && betaPolicyEnabledForAccount(account) {
 		policy := s.evaluateBetaPolicy(ctx, c.GetHeader("anthropic-beta"), account)
 		if policy.blockErr != nil {
 			return nil, policy.blockErr
@@ -6349,6 +6349,13 @@ type BetaBlockedError struct {
 
 func (e *BetaBlockedError) Error() string { return e.Message }
 
+func betaPolicyEnabledForAccount(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	return !(account.Platform == PlatformAnthropic && account.IsOAuth())
+}
+
 // betaPolicyResult holds the evaluated result of beta policy rules for a single request.
 type betaPolicyResult struct {
 	blockErr  *BetaBlockedError   // non-nil if a block rule matched
@@ -6357,7 +6364,7 @@ type betaPolicyResult struct {
 
 // evaluateBetaPolicy loads settings once and evaluates all rules against the given request.
 func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader string, account *Account) betaPolicyResult {
-	if s.settingService == nil {
+	if s.settingService == nil || !betaPolicyEnabledForAccount(account) {
 		return betaPolicyResult{}
 	}
 	settings, err := s.settingService.GetBetaPolicySettings(ctx)
@@ -6511,7 +6518,7 @@ func (s *GatewayService) resolveBedrockBetaTokensForRequest(
 // checkBetaPolicyBlockForTokens 检查 token 列表中是否有被管理员 block 规则命中的 token。
 // 用于补充 evaluateBetaPolicy 对 header 的检查，覆盖 body 自动注入的 token。
 func (s *GatewayService) checkBetaPolicyBlockForTokens(ctx context.Context, tokens []string, account *Account) *BetaBlockedError {
-	if s.settingService == nil || len(tokens) == 0 {
+	if s.settingService == nil || len(tokens) == 0 || !betaPolicyEnabledForAccount(account) {
 		return nil
 	}
 	settings, err := s.settingService.GetBetaPolicySettings(ctx)

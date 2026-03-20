@@ -501,6 +501,10 @@
             </p>
           </div>
           <div class="space-y-5 p-6">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+              {{ t('admin.settings.betaPolicy.anthropicOAuthNotice') }}
+            </div>
+
             <!-- Loading State -->
             <div v-if="betaPolicyLoading" class="flex items-center gap-2 text-gray-500">
               <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>

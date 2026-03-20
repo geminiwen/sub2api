@@ -4431,6 +4431,7 @@ export default {
       betaPolicy: {
         title: 'Beta Policy',
         description: 'How to handle Beta features when configuring the forwarding of Anthropic API requests. Applicable only to the /v1/messages endpoint.',
+        anthropicOAuthNotice: 'Note: Beta Policy does not apply to Anthropic OAuth accounts.',
         action: 'Action',
         actionPass: 'Pass (transparent)',
         actionFilter: 'Filter (remove)',
