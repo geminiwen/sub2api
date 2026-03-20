@@ -11,6 +11,11 @@ const (
 	BetaFineGrainedToolStreaming = "fine-grained-tool-streaming-2025-05-14"
 	BetaTokenCounting            = "token-counting-2024-11-01"
 	BetaContext1M                = "context-1m-2025-08-07"
+	BetaContextManagement        = "context-management-2025-06-27"
+	BetaPromptCachingScope       = "prompt-caching-scope-2026-01-05"
+	BetaRedactThinking           = "redact-thinking-2026-02-12"
+	BetaAdvancedToolUse          = "advanced-tool-use-2025-11-20"
+	BetaEffort                   = "effort-2025-11-24"
 	BetaFastMode                 = "fast-mode-2026-02-01"
 )
 
@@ -19,7 +24,7 @@ const (
 var DroppedBetas = []string{}
 
 // DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
-const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
+const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvancedToolUse + "," + BetaEffort
 
 // MessageBetaHeaderNoTools /v1/messages 在无工具时的 beta header
 //
@@ -27,16 +32,19 @@ const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleav
 // Claude Code for non-Claude-Code clients, we must include the claude-code beta
 // even if the request doesn't use tools, otherwise upstream may reject the
 // request as a non-Claude-Code API request.
-const MessageBetaHeaderNoTools = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking
+const MessageBetaHeaderNoTools = DefaultBetaHeader
 
 // MessageBetaHeaderWithTools /v1/messages 在有工具时的 beta header
-const MessageBetaHeaderWithTools = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking
+const MessageBetaHeaderWithTools = DefaultBetaHeader
 
-// CountTokensBetaHeader count_tokens 请求使用的 anthropic-beta header
-const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaTokenCounting
+// HaikuBetaHeader OAuth Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）
+const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope
 
-// HaikuBetaHeader Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）
-const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
+// CountTokensBetaHeader 非 Haiku 模型的 count_tokens 请求使用的 anthropic-beta header
+const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting
+
+// HaikuCountTokensBetaHeader Haiku 模型的 count_tokens 请求使用的 anthropic-beta header
+const HaikuCountTokensBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting
 
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
 const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
@@ -48,7 +56,7 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	"User-Agent":                                "claude-cli/2.1.79 (external, cli)",
+	"User-Agent":                                "claude-cli/2.1.80 (external, cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.70.0",
 	"X-Stainless-OS":                            "Linux",

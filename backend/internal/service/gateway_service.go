@@ -4080,7 +4080,7 @@ func resolveBillingHeaderCLIVersion(userAgent string) string {
 	if version := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"]); version != "" {
 		return version
 	}
-	return "2.1.79"
+	return "2.1.80"
 }
 
 func extractFirstUserTextBlock(body []byte) string {
@@ -6157,8 +6157,6 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// Build effective drop set: merge static defaults with dynamic beta policy filter rules
 	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account)
 	effectiveDropSet := mergeDropSets(policyFilterSet)
-	effectiveDropWithClaudeCodeSet := mergeDropSets(policyFilterSet, claude.BetaClaudeCode)
-
 	// 处理 anthropic-beta header（OAuth 账号需要包含 oauth beta）
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
@@ -6168,13 +6166,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			applyClaudeCodeMimicHeaders(req, reqStream)
 
 			incomingBeta := req.Header.Get("anthropic-beta")
-			// Match real Claude CLI traffic (per mitmproxy reports):
-			// messages requests typically use only oauth + interleaved-thinking.
-			// Also drop claude-code beta if a downstream client added it.
-			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropWithClaudeCodeSet))
+			requiredBetas := strings.Split(s.getBetaHeader(modelID, ""), ",")
+			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
 		} else {
-			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
+			// Claude Code 客户端：尽量透传原始 header，同时补齐必需的默认 beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
 			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), effectiveDropSet))
 		}
@@ -6209,48 +6204,30 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 // getBetaHeader 处理anthropic-beta header
 // 对于OAuth账号，需要确保包含oauth-2025-04-20
 func (s *GatewayService) getBetaHeader(modelID string, clientBetaHeader string) string {
+	isHaikuModel := strings.Contains(strings.ToLower(modelID), "haiku")
+	defaultBetaHeader := claude.DefaultBetaHeader
+	if isHaikuModel {
+		defaultBetaHeader = claude.HaikuBetaHeader
+	}
+
 	// 如果客户端传了anthropic-beta
 	if clientBetaHeader != "" {
-		// 已包含oauth beta则直接返回
-		if strings.Contains(clientBetaHeader, claude.BetaOAuth) {
-			return clientBetaHeader
-		}
-
-		// 需要添加oauth beta
-		parts := strings.Split(clientBetaHeader, ",")
-		for i, p := range parts {
-			parts[i] = strings.TrimSpace(p)
-		}
-
-		// 在claude-code-20250219后面插入oauth beta
-		claudeCodeIdx := -1
-		for i, p := range parts {
-			if p == claude.BetaClaudeCode {
-				claudeCodeIdx = i
-				break
-			}
-		}
-
-		if claudeCodeIdx >= 0 {
-			// 在claude-code后面插入
-			newParts := make([]string, 0, len(parts)+1)
-			newParts = append(newParts, parts[:claudeCodeIdx+1]...)
-			newParts = append(newParts, claude.BetaOAuth)
-			newParts = append(newParts, parts[claudeCodeIdx+1:]...)
-			return strings.Join(newParts, ",")
-		}
-
-		// 没有claude-code，放在第一位
-		return claude.BetaOAuth + "," + clientBetaHeader
+		return mergeAnthropicBeta(strings.Split(defaultBetaHeader, ","), clientBetaHeader)
 	}
 
 	// 客户端没传，根据模型生成
-	// haiku 模型不需要 claude-code beta
-	if strings.Contains(strings.ToLower(modelID), "haiku") {
-		return claude.HaikuBetaHeader
-	}
+	return defaultBetaHeader
+}
 
-	return claude.DefaultBetaHeader
+func (s *GatewayService) getCountTokensBetaHeader(modelID string, clientBetaHeader string) string {
+	defaultBetaHeader := claude.CountTokensBetaHeader
+	if strings.Contains(strings.ToLower(modelID), "haiku") {
+		defaultBetaHeader = claude.HaikuCountTokensBetaHeader
+	}
+	if clientBetaHeader != "" {
+		return mergeAnthropicBeta(strings.Split(defaultBetaHeader, ","), clientBetaHeader)
+	}
+	return defaultBetaHeader
 }
 
 func requestNeedsBetaFeatures(body []byte) bool {
@@ -8805,19 +8782,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			applyClaudeCodeMimicHeaders(req, false)
 
 			incomingBeta := req.Header.Get("anthropic-beta")
-			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
+			requiredBetas := strings.Split(s.getCountTokensBetaHeader(modelID, ""), ",")
 			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
 		} else {
-			clientBetaHeader := req.Header.Get("anthropic-beta")
-			if clientBetaHeader == "" {
-				req.Header.Set("anthropic-beta", claude.CountTokensBetaHeader)
-			} else {
-				beta := s.getBetaHeader(modelID, clientBetaHeader)
-				if !strings.Contains(beta, claude.BetaTokenCounting) {
-					beta = beta + "," + claude.BetaTokenCounting
-				}
-				req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
-			}
+			beta := s.getCountTokensBetaHeader(modelID, req.Header.Get("anthropic-beta"))
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
 		}
 	} else {
 		// API-key accounts: apply beta policy filter to strip controlled tokens

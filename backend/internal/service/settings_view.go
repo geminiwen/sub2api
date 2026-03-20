@@ -248,11 +248,6 @@ func DefaultBetaPolicySettings() *BetaPolicySettings {
 				Action:    BetaPolicyActionFilter,
 				Scope:     BetaPolicyScopeAll,
 			},
-			{
-				BetaToken: "context-1m-2025-08-07",
-				Action:    BetaPolicyActionFilter,
-				Scope:     BetaPolicyScopeAll,
-			},
 		},
 	}
 }

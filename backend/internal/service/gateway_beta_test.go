@@ -1,12 +1,192 @@
 package service
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetBetaHeader_InjectsRequiredDefaultBetas(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader("claude-sonnet-4-5", "claude-code-20250219,interleaved-thinking-2025-05-14")
+
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		got,
+	)
+}
+
+func TestGetBetaHeader_UsesExpectedDefaultsWhenIncomingBetaMissing(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader("claude-sonnet-4-5", "")
+
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		got,
+	)
+}
+
+func TestGetBetaHeader_HaikuUsesFixedOAuthOrder(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader("claude-haiku-4-5-20251001", "")
+
+	require.Equal(
+		t,
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+		got,
+	)
+}
+
+func TestGetBetaHeader_HaikuPreservesInterleavedThinkingWhenProvided(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader("claude-haiku-4-5-20251001", "interleaved-thinking-2025-05-14")
+
+	require.Equal(
+		t,
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+		got,
+	)
+}
+
+func TestGetBetaHeader_PreservesExtraTokensBeyondDefaults(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader(
+		"claude-sonnet-4-5",
+		"claude-code-20250219,custom-beta",
+	)
+
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,custom-beta",
+		got,
+	)
+}
+
+func TestGetBetaHeader_NonHaikuWithSpecificIncomingBetas(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader(
+		"claude-sonnet-4-5",
+		"claude-code-20250219,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,effort-2025-11-24",
+	)
+
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		got,
+	)
+}
+
+func TestBuildCountTokensRequest_HaikuAddsCountTokenBetas(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	c.Request.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
+
+	svc := &GatewayService{}
+	account := &Account{
+		Type: AccountTypeOAuth,
+	}
+
+	req, err := svc.buildCountTokensRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-haiku-4-5-20251001","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-haiku-4-5-20251001",
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",
+		testHeaderValue(req.Header, "anthropic-beta"),
+	)
+}
+
+func TestBuildCountTokensRequest_HaikuWithoutIncomingBetaDoesNotInjectInterleavedThinking(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	svc := &GatewayService{}
+	account := &Account{
+		Type: AccountTypeOAuth,
+	}
+
+	req, err := svc.buildCountTokensRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-haiku-4-5-20251001","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-haiku-4-5-20251001",
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",
+		testHeaderValue(req.Header, "anthropic-beta"),
+	)
+}
+
+func TestBuildCountTokensRequest_DefaultsForNonHaiku(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	svc := &GatewayService{}
+	account := &Account{
+		Type: AccountTypeOAuth,
+	}
+
+	req, err := svc.buildCountTokensRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-5",
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",
+		testHeaderValue(req.Header, "anthropic-beta"),
+	)
+}
+
+func TestDefaultBetaPolicySettings_DoesNotFilterContext1M(t *testing.T) {
+	settings := DefaultBetaPolicySettings()
+	for _, rule := range settings.Rules {
+		require.NotEqual(t, claude.BetaContext1M, rule.BetaToken)
+	}
+}
 
 func TestMergeAnthropicBeta(t *testing.T) {
 	got := mergeAnthropicBeta(
