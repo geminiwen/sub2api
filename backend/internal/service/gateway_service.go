@@ -85,7 +85,16 @@ var (
 	modelsListCacheHitTotal   atomic.Int64
 	modelsListCacheMissTotal  atomic.Int64
 	modelsListCacheStoreTotal atomic.Int64
+
+	anthropicBillingHeaderCCHRe = regexp.MustCompile(`(x-anthropic-billing-header:[^"]*?\bcch=)[^;"]*(;)`)
 )
+
+var outgoingLowercaseHeaderWhitelist = []string{
+	"anthropic-beta",
+	"anthropic-dangerous-direct-browser-access",
+	"anthropic-version",
+	"x-app",
+}
 
 func GatewayWindowCostPrefetchStats() (cacheHit, cacheMiss, batchSQL, fallback, errCount int64) {
 	return windowCostPrefetchCacheHitTotal.Load(),
@@ -303,6 +312,33 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		sysPreview,
 		strings.Join(h, " "),
 	)
+}
+
+func lowercaseWhitelistedHeaderKeys(h http.Header, whitelist []string) {
+	if h == nil || len(whitelist) == 0 {
+		return
+	}
+
+	for _, target := range whitelist {
+		target = strings.TrimSpace(strings.ToLower(target))
+		if target == "" {
+			continue
+		}
+
+		var values []string
+		for key, existingValues := range h {
+			if !strings.EqualFold(key, target) {
+				continue
+			}
+			if values == nil {
+				values = append(values, existingValues...)
+			}
+			delete(h, key)
+		}
+		if len(values) > 0 {
+			h[target] = values
+		}
+	}
 }
 
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
@@ -911,6 +947,97 @@ func stripCacheControlFromSystemBlocks(system any) bool {
 		changed = true
 	}
 	return changed
+}
+
+func moveTopLevelJSONFieldAfter(body []byte, field string, anchor string) []byte {
+	if len(body) == 0 || field == "" || anchor == "" || field == anchor {
+		return body
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil {
+		return body
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return body
+	}
+
+	order := make([]string, 0, 8)
+	fields := make(map[string]json.RawMessage, 8)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return body
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return body
+		}
+
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return body
+		}
+
+		if _, exists := fields[key]; !exists {
+			order = append(order, key)
+		}
+		fields[key] = raw
+	}
+
+	tok, err = dec.Token()
+	if err != nil {
+		return body
+	}
+	delim, ok = tok.(json.Delim)
+	if !ok || delim != '}' {
+		return body
+	}
+
+	fieldIndex := -1
+	anchorIndex := -1
+	for i, key := range order {
+		switch key {
+		case field:
+			fieldIndex = i
+		case anchor:
+			anchorIndex = i
+		}
+	}
+	if fieldIndex == -1 || anchorIndex == -1 || fieldIndex == anchorIndex+1 {
+		return body
+	}
+
+	reordered := make([]string, 0, len(order))
+	for i, key := range order {
+		if key == field {
+			continue
+		}
+		reordered = append(reordered, key)
+		if i == anchorIndex {
+			reordered = append(reordered, field)
+		}
+	}
+
+	var out bytes.Buffer
+	out.Grow(len(body) + 8)
+	out.WriteByte('{')
+	for i, key := range reordered {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return body
+		}
+		out.Write(keyJSON)
+		out.WriteByte(':')
+		out.Write(fields[key])
+	}
+	out.WriteByte('}')
+	return out.Bytes()
 }
 
 func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAuthNormalizeOptions) ([]byte, string) {
@@ -3819,6 +3946,7 @@ func extractFirstUserTextBlock(body []byte) string {
 func buildAnthropicBillingHeader(body []byte, userAgent string) string {
 	version := resolveBillingHeaderCLIVersion(userAgent)
 	firstUserText := extractFirstUserTextBlock(body)
+	entrypoint := resolveClaudeCLIEntrypoint(userAgent)
 
 	var picked strings.Builder
 	for _, idx := range []int{4, 7, 20} {
@@ -3831,11 +3959,29 @@ func buildAnthropicBillingHeader(body []byte, userAgent string) string {
 
 	sum := sha256.Sum256([]byte(claudeCodeBillingHashSalt + picked.String() + version))
 	ccVersion := fmt.Sprintf("%s.%x", version, sum[:])[:len(version)+4]
-	return fmt.Sprintf("%s cc_version=%s; cc_entrypoint=%s; cch=%s;", anthropicBillingHeaderPrefix, ccVersion, claudeCodeBillingEntrypoint, claudeCodeBillingCCHZero)
+	return fmt.Sprintf("%s cc_version=%s; cc_entrypoint=%s; cch=%s;", anthropicBillingHeaderPrefix, ccVersion, entrypoint, claudeCodeBillingCCHZero)
+}
+
+func resolveClaudeCLIEntrypoint(userAgent string) string {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(userAgent)), "sdk-cli") {
+		return "sdk-cli"
+	}
+	return claudeCodeBillingEntrypoint
+}
+
+func normalizeAnthropicBillingHeaderCCH(body []byte) []byte {
+	if len(body) == 0 || !bytes.Contains(body, []byte(anthropicBillingHeaderPrefix)) {
+		return body
+	}
+	return anthropicBillingHeaderCCHRe.ReplaceAll(body, []byte("${1}"+claudeCodeBillingCCHZero+"${2}"))
 }
 
 func applyAnthropicBillingCCH(body []byte, requestPath string) []byte {
-	if !strings.Contains(requestPath, "/v1/messages") || !bytes.Contains(body, []byte("cch="+claudeCodeBillingCCHZero)) {
+	if !strings.Contains(requestPath, "/v1/messages") || !bytes.Contains(body, []byte(anthropicBillingHeaderPrefix)) {
+		return body
+	}
+	body = normalizeAnthropicBillingHeaderCCH(body)
+	if !bytes.Contains(body, []byte("cch="+claudeCodeBillingCCHZero)) {
 		return body
 	}
 
@@ -5015,6 +5161,8 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
 
+	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+
 	return req, nil
 }
 
@@ -5767,6 +5915,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	if account.IsOAuth() {
+		body = moveTopLevelJSONFieldAfter(body, "stream", "system")
 		requestPath := ""
 		if c != nil && c.Request != nil && c.Request.URL != nil {
 			requestPath = c.Request.URL.Path
@@ -5858,6 +6007,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if s.debugClaudeMimicEnabled() {
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
+
+	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
 
 	return req, nil
 }
@@ -8370,6 +8521,8 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
 
+	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+
 	return req, nil
 }
 
@@ -8406,6 +8559,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			}
 		}
 	}
+	body = moveTopLevelJSONFieldAfter(body, "stream", "system")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -8491,6 +8645,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if s.debugClaudeMimicEnabled() {
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
+
+	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
 
 	return req, nil
 }

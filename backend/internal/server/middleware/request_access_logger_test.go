@@ -226,3 +226,40 @@ func TestLogger_AccessLogDroppedWhenLevelWarn(t *testing.T) {
 		}
 	}
 }
+
+func TestLogger_ServerErrorProducesErrorLogAtWarnLevel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := initMiddlewareTestLoggerWithLevel(t, "warn")
+
+	r := gin.New()
+	r.Use(RequestLogger())
+	r.Use(Logger())
+	r.GET("/api/test", func(c *gin.Context) {
+		c.Status(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d", w.Code)
+	}
+
+	events := sink.list()
+	found := false
+	for _, event := range events {
+		if event == nil || event.Message != "http request failed" {
+			continue
+		}
+		found = true
+		if event.Level != "error" {
+			t.Fatalf("level=%q, want error", event.Level)
+		}
+		if event.Fields["path"] != "/api/test" {
+			t.Fatalf("path=%v, want /api/test", event.Fields["path"])
+		}
+	}
+	if !found {
+		t.Fatalf("expected error log for 500 response, got %+v", events)
+	}
+}

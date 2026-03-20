@@ -59,6 +59,16 @@ func Logger() gin.HandlerFunc {
 		l := logger.FromContext(c.Request.Context()).With(fields...)
 		l.Info("http request completed", zap.Time("completed_at", endTime))
 
+		if statusCode >= 500 {
+			errFields := []zap.Field{
+				zap.Time("completed_at", endTime),
+			}
+			if len(c.Errors) > 0 {
+				errFields = append(errFields, zap.String("errors", c.Errors.String()))
+			}
+			l.Error("http request failed", errFields...)
+		}
+
 		if len(c.Errors) > 0 {
 			l.Warn("http request contains gin errors", zap.String("errors", c.Errors.String()))
 		}

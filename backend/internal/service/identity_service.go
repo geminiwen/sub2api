@@ -87,7 +87,12 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 			mergeHeadersIntoFingerprint(cached, headers)
 			needWrite = true
 			logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
-		} else if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
+		}
+		if normalizedUA := composeLearnedClaudeCLIUserAgent(cached.UserAgent, clientUA); normalizedUA != "" && normalizedUA != cached.UserAgent {
+			cached.UserAgent = normalizedUA
+			needWrite = true
+		}
+		if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
 			// 距上次写入超过24小时，续期TTL
 			needWrite = true
 		}
@@ -123,7 +128,11 @@ func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fin
 
 	// 获取User-Agent
 	if ua := headers.Get("User-Agent"); ua != "" {
-		fp.UserAgent = ua
+		if normalizedUA := composeLearnedClaudeCLIUserAgent(ua, ua); normalizedUA != "" {
+			fp.UserAgent = normalizedUA
+		} else {
+			fp.UserAgent = ua
+		}
 	} else {
 		fp.UserAgent = defaultFingerprint.UserAgent
 	}
@@ -170,6 +179,62 @@ func getHeaderOrDefault(headers http.Header, key, defaultValue string) string {
 		return v
 	}
 	return defaultValue
+}
+
+func composeLearnedClaudeCLIUserAgent(cachedUA, clientUA string) string {
+	product := extractProduct(cachedUA)
+	if product == "" {
+		product = extractProduct(clientUA)
+	}
+	if product == "" {
+		product = extractProduct(defaultFingerprint.UserAgent)
+	}
+
+	version := ExtractCLIVersion(cachedUA)
+	if version == "" {
+		version = ExtractCLIVersion(clientUA)
+	}
+	if version == "" {
+		version = ExtractCLIVersion(defaultFingerprint.UserAgent)
+	}
+
+	descriptors := extractUserAgentDescriptors(clientUA)
+	if len(descriptors) == 0 {
+		descriptors = extractUserAgentDescriptors(cachedUA)
+	}
+	if len(descriptors) == 0 {
+		descriptors = extractUserAgentDescriptors(defaultFingerprint.UserAgent)
+	}
+
+	if product == "" || version == "" {
+		return strings.TrimSpace(clientUA)
+	}
+	if len(descriptors) == 0 {
+		return fmt.Sprintf("%s/%s", product, version)
+	}
+
+	return fmt.Sprintf("%s/%s (%s)", product, version, strings.Join(descriptors, ", "))
+}
+
+func extractUserAgentDescriptors(ua string) []string {
+	ua = strings.TrimSpace(ua)
+	start := strings.Index(ua, "(")
+	end := strings.LastIndex(ua, ")")
+	if start < 0 || end <= start {
+		return nil
+	}
+
+	raw := ua[start+1 : end]
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 // ApplyFingerprint 将指纹应用到请求头（覆盖原有的x-stainless-*头）

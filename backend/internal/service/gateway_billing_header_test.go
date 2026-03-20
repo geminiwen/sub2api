@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -165,4 +167,146 @@ func TestApplyAnthropicBillingCCH_MatchesFixture(t *testing.T) {
 	updated := applyAnthropicBillingCCH(body, "/v1/messages")
 
 	require.Contains(t, string(updated), "cch=758af;")
+}
+
+func TestApplyAnthropicBillingCCH_UsesUpdatedEntrypointFromBillingHeader(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-sonnet-4-6",
+		"messages": [
+			{
+				"role": "user",
+				"content": [
+					{"type":"text","text":"hi"}
+				]
+			}
+		],
+		"system": [
+			{"type":"text","text":"x-anthropic-billing-header: cc_version=old; cc_entrypoint=old; cch=00000;"}
+		],
+		"stream": false
+	}`)
+
+	cliBody := upsertAnthropicBillingHeaderSystemBlock(body, "claude-cli/2.1.79 (external, cli)", "/v1/messages")
+	sdkCLIBody := upsertAnthropicBillingHeaderSystemBlock(body, "claude-cli/2.1.79 (external, sdk-cli)", "/v1/messages")
+
+	cliUpdated := applyAnthropicBillingCCH(cliBody, "/v1/messages")
+	sdkCLIUpdated := applyAnthropicBillingCCH(sdkCLIBody, "/v1/messages")
+
+	require.Contains(t, string(cliUpdated), "cc_entrypoint=cli;")
+	require.Contains(t, string(sdkCLIUpdated), "cc_entrypoint=sdk-cli;")
+	require.NotEqual(t, string(cliUpdated), string(sdkCLIUpdated))
+}
+
+func TestApplyAnthropicBillingCCH_RecomputesAfterResettingExistingCCH(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.79.04b; cc_entrypoint=sdk-cli; cch=12345;"}],"stream":false}`)
+
+	updated := applyAnthropicBillingCCH(body, "/v1/messages")
+
+	require.Contains(t, string(updated), "cc_entrypoint=sdk-cli;")
+	require.Contains(t, string(updated), "cch=758af;")
+	require.NotContains(t, string(updated), "cch=12345;")
+}
+
+func TestApplyAnthropicBillingCCH_SkipsWhenBillingHeaderMissing(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"contains cch=00000 but no billing header"}]}],"system":[{"type":"text","text":"sys"}],"stream":false}`)
+
+	updated := applyAnthropicBillingCCH(body, "/v1/messages")
+
+	require.Equal(t, string(body), string(updated))
+}
+
+func TestBuildAnthropicBillingHeader_PreservesClientEntrypoint(t *testing.T) {
+	body := []byte(`{
+		"messages": [
+			{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "0000t00-000000000000e"}
+				]
+			}
+		],
+		"system": [
+			{"type": "text", "text": "x-anthropic-billing-header: cc_version=old; cc_entrypoint=sdk-cli; cch=53f1c;"}
+		]
+	}`)
+
+	header := buildAnthropicBillingHeader(body, "claude-cli/2.1.79 (external, sdk-cli)")
+	require.Equal(t, "x-anthropic-billing-header: cc_version=2.1.79.04b; cc_entrypoint=sdk-cli; cch=00000;", header)
+}
+
+func TestResolveClaudeCLIEntrypoint_FromUserAgent(t *testing.T) {
+	cases := []struct {
+		name string
+		ua   string
+		want string
+	}{
+		{name: "plain cli", ua: "claude-cli/2.1.79 (external, cli)", want: "cli"},
+		{name: "plain sdk cli", ua: "claude-cli/2.1.79 (external, sdk-cli)", want: "sdk-cli"},
+		{name: "agent sdk", ua: "claude-cli/2.1.79 (external, sdk-cli, agent-sdk/0.1.12)", want: "sdk-cli"},
+		{name: "agent sdk client app", ua: "claude-cli/2.1.79 (external, sdk-cli, agent-sdk/0.1.12, client-app/myapp)", want: "sdk-cli"},
+		{name: "agent sdk workload", ua: "claude-cli/2.1.79 (external, sdk-cli, agent-sdk/0.1.12, client-app/myapp, workload/cron)", want: "sdk-cli"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, resolveClaudeCLIEntrypoint(tc.ua))
+		})
+	}
+}
+
+func TestLowercaseWhitelistedHeaderKeys_RewritesWhitelistOnly(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Anthropic-Beta", "beta")
+	headers.Set("Anthropic-Version", "2023-06-01")
+	headers.Set("X-App", "cli")
+	headers.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	headers.Set("Content-Type", "application/json")
+
+	lowercaseWhitelistedHeaderKeys(headers, outgoingLowercaseHeaderWhitelist)
+
+	require.Equal(t, []string{"beta"}, headers["anthropic-beta"])
+	require.Equal(t, []string{"2023-06-01"}, headers["anthropic-version"])
+	require.Equal(t, []string{"cli"}, headers["x-app"])
+	require.Equal(t, []string{"true"}, headers["anthropic-dangerous-direct-browser-access"])
+	require.Equal(t, []string{"application/json"}, headers["Content-Type"])
+
+	_, hasCanonicalBeta := headers["Anthropic-Beta"]
+	require.False(t, hasCanonicalBeta)
+	_, hasCanonicalVersion := headers["Anthropic-Version"]
+	require.False(t, hasCanonicalVersion)
+	_, hasCanonicalApp := headers["X-App"]
+	require.False(t, hasCanonicalApp)
+}
+
+func TestLowercaseWhitelistedHeaderKeys_WritesLowercaseOnHTTP11(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	require.NoError(t, err)
+
+	req.Header.Set("Anthropic-Beta", "claude-code-20250219")
+	req.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("X-App", "cli")
+
+	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+
+	var buf bytes.Buffer
+	require.NoError(t, req.Write(&buf))
+
+	wire := buf.String()
+	require.Contains(t, wire, "anthropic-beta: claude-code-20250219\r\n")
+	require.Contains(t, wire, "anthropic-dangerous-direct-browser-access: true\r\n")
+	require.Contains(t, wire, "anthropic-version: 2023-06-01\r\n")
+	require.Contains(t, wire, "x-app: cli\r\n")
+}
+
+func TestMoveTopLevelJSONFieldAfter_ReordersStreamBehindSystem(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[],"system":[{"type":"text","text":"sys"}],"tools":[]}`)
+
+	updated := moveTopLevelJSONFieldAfter(body, "stream", "system")
+
+	streamIndex := bytes.Index(updated, []byte(`"stream":true`))
+	systemIndex := bytes.Index(updated, []byte(`"system":[{"type":"text","text":"sys"}]`))
+	require.NotEqual(t, -1, streamIndex)
+	require.NotEqual(t, -1, systemIndex)
+	require.Greater(t, streamIndex, systemIndex)
 }

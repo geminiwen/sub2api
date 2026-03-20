@@ -685,8 +685,64 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	req, err := svc.buildUpstreamRequest(context.Background(), c, account, []byte(`{"model":"claude-3-7-sonnet-20250219"}`), "oauth-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer oauth-token", req.Header.Get("authorization"))
-	require.Contains(t, req.Header.Get("anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
+	require.Contains(t, strings.Join(req.Header["anthropic-beta"], ","), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
 	require.Equal(t, "br, gzip, deflate", req.Header.Get("accept-encoding"))
+}
+
+func TestGatewayService_BuildUpstreamRequest_PlacesStreamAfterSystemForAnthropic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+	}
+
+	body := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"system":[{"type":"text","text":"sys"}]}`)
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-sonnet-4-5", true, false)
+	require.NoError(t, err)
+
+	builtBody, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	streamIndex := bytes.Index(builtBody, []byte(`"stream":true`))
+	systemIndex := bytes.Index(builtBody, []byte(`"system":[{"type":"text","text":"sys"}]`))
+	require.NotEqual(t, -1, streamIndex)
+	require.NotEqual(t, -1, systemIndex)
+	require.Greater(t, streamIndex, systemIndex)
+}
+
+func TestGatewayService_BuildUpstreamRequest_ComputesCCHAfterFinalBodyOrdering(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+	}
+
+	body := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"0000t00-000000000000e"}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=old; cc_entrypoint=old; cch=12345;"},{"type":"text","text":"sys"}]}`)
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-sonnet-4-5", true, false)
+	require.NoError(t, err)
+
+	builtBody, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, string(builtBody), string(applyAnthropicBillingCCH(builtBody, "/v1/messages")))
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {
