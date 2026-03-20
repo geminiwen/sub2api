@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 // 默认配置常量
@@ -335,6 +336,18 @@ func wrapDecoder(body io.ReadCloser, encoding string) (io.ReadCloser, error) {
 		return &decoderReadCloser{
 			Reader:  reader,
 			closeFn: body.Close,
+		}, nil
+	case "zstd":
+		reader, err := zstd.NewReader(body)
+		if err != nil {
+			return nil, err
+		}
+		return &decoderReadCloser{
+			Reader: reader,
+			closeFn: func() error {
+				reader.Close()
+				return body.Close()
+			},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported content encoding %q", encoding)

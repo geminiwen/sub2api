@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"io"
 	"net/http"
@@ -59,6 +61,28 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_Success() {
 	// Assertions on captured request data
 	require.Equal(s.T(), "Bearer at", captured.authorization, "Authorization header mismatch")
 	require.Equal(s.T(), "oauth-2025-04-20", captured.anthropicBeta, "anthropic-beta header mismatch")
+}
+
+func (s *ClaudeUsageServiceSuite) TestFetchUsage_DeflateResponse() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "deflate")
+
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		_, _ = zw.Write([]byte(`{"five_hour":{"utilization":12.5,"resets_at":"2025-01-01T00:00:00Z"}}`))
+		_ = zw.Close()
+		_, _ = w.Write(buf.Bytes())
+	}))
+
+	s.fetcher = &claudeUsageService{
+		usageURL:          s.srv.URL,
+		allowPrivateHosts: true,
+	}
+
+	resp, err := s.fetcher.FetchUsage(context.Background(), "at", "")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), 12.5, resp.FiveHour.Utilization)
 }
 
 func (s *ClaudeUsageServiceSuite) TestFetchUsage_NonOK() {

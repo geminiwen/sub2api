@@ -17,7 +17,6 @@ const defaultClaudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
 // 默认 User-Agent，与用户抓包的请求一致
 const defaultUsageUserAgent = "claude-code/2.1.7"
-
 type claudeUsageService struct {
 	usageURL          string
 	allowPrivateHosts bool
@@ -53,11 +52,11 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 		return nil, fmt.Errorf("create request failed: %w", err)
 	}
 
-	// 设置请求头（与抓包一致，但不设置 Accept-Encoding，让 Go 自动处理压缩）
+	// 设置请求头。Accept-Encoding 保持默认行为，让客户端沿用标准 gzip 处理。
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+opts.AccessToken)
-	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("Anthropic-Beta", "oauth-2025-04-20")
 
 	// 设置 User-Agent（优先使用缓存的 Fingerprint，否则使用默认值）
 	userAgent := defaultUsageUserAgent
@@ -93,6 +92,10 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, fmt.Errorf("decode usage response failed: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

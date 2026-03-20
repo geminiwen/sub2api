@@ -12,6 +12,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -234,6 +235,27 @@ func (s *HTTPUpstreamSuite) TestDo_DecodesBrotliResponse() {
 	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
 }
 
+func (s *HTTPUpstreamSuite) TestDo_DecodesZstdResponse() {
+	payload := compressWithZstd(s.T(), []byte("zstd-body"))
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "zstd")
+		_, _ = w.Write(payload)
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	up := NewHTTPUpstream(s.cfg)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/zstd", nil)
+	require.NoError(s.T(), err)
+	resp, err := up.Do(req, "", 1, 1)
+	require.NoError(s.T(), err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "zstd-body", string(body))
+	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
+}
+
 // TestAccountIsolation_DifferentAccounts 测试账户隔离模式
 // 验证不同账户使用独立的连接池
 func (s *HTTPUpstreamSuite) TestAccountIsolation_DifferentAccounts() {
@@ -392,5 +414,16 @@ func compressWithBrotli(payload []byte) []byte {
 	w := brotli.NewWriter(&buf)
 	_, _ = w.Write(payload)
 	_ = w.Close()
+	return buf.Bytes()
+}
+
+func compressWithZstd(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := zstd.NewWriter(&buf)
+	require.NoError(t, err)
+	_, err = w.Write(payload)
+	require.NoError(t, err)
+	w.Close()
 	return buf.Bytes()
 }

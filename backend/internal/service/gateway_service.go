@@ -97,6 +97,22 @@ var outgoingLowercaseHeaderWhitelist = []string{
 	"x-app",
 }
 
+var outgoingExactCaseHeaderWhitelist = map[string]string{
+	"anthropic-beta": "anthropic-beta",
+	"anthropic-dangerous-direct-browser-access": "anthropic-dangerous-direct-browser-access",
+	"anthropic-version":                         "anthropic-version",
+	"x-app":                                     "x-app",
+	"x-stainless-arch":                          "X-Stainless-Arch",
+	"x-stainless-helper-method":                 "X-Stainless-Helper-Method",
+	"x-stainless-lang":                          "X-Stainless-Lang",
+	"x-stainless-os":                            "X-Stainless-OS",
+	"x-stainless-package-version":               "X-Stainless-Package-Version",
+	"x-stainless-retry-count":                   "X-Stainless-Retry-Count",
+	"x-stainless-runtime":                       "X-Stainless-Runtime",
+	"x-stainless-runtime-version":               "X-Stainless-Runtime-Version",
+	"x-stainless-timeout":                       "X-Stainless-Timeout",
+}
+
 func GatewayWindowCostPrefetchStats() (cacheHit, cacheMiss, batchSQL, fallback, errCount int64) {
 	return windowCostPrefetchCacheHitTotal.Load(),
 		windowCostPrefetchCacheMissTotal.Load(),
@@ -342,6 +358,32 @@ func lowercaseWhitelistedHeaderKeys(h http.Header, whitelist []string) {
 	}
 }
 
+func exactCaseWhitelistedHeaderKeys(h http.Header, whitelist map[string]string) {
+	if h == nil || len(whitelist) == 0 {
+		return
+	}
+
+	for source, target := range whitelist {
+		source = strings.TrimSpace(strings.ToLower(source))
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+
+		var values []string
+		for key, existingValues := range h {
+			if !strings.EqualFold(key, source) {
+				continue
+			}
+			values = append(values, existingValues...)
+			delete(h, key)
+		}
+		if len(values) > 0 {
+			h[target] = values
+		}
+	}
+}
+
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
 	line := buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode)
 	if line == "" {
@@ -390,6 +432,7 @@ const (
 	claudeCodeBillingCCHMask     = uint64(0xfffff)
 	claudeCodeBillingCCHZero     = "00000"
 )
+
 // ErrNoAvailableAccounts 表示没有可用的账号
 var ErrNoAvailableAccounts = errors.New("no available accounts")
 
@@ -5308,7 +5351,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
 
-	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
 
 	return req, nil
 }
@@ -6158,7 +6201,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
-	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
 
 	return req, nil
 }
@@ -6237,7 +6280,7 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request, isStream bool) {
 	if req.Header.Get("accept") == "" {
 		req.Header.Set("accept", "application/json")
 	}
-	req.Header.Set("accept-encoding", "br, gzip, deflate")
+	req.Header.Set("accept-encoding", "gzip, deflate, br, zstd")
 	for key, value := range claude.DefaultHeaders {
 		if value == "" {
 			continue
@@ -8671,7 +8714,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
 
-	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
 
 	return req, nil
 }
@@ -8797,7 +8840,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
-	lowercaseWhitelistedHeaderKeys(req.Header, outgoingLowercaseHeaderWhitelist)
+	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
 
 	return req, nil
 }

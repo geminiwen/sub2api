@@ -27,6 +27,16 @@ type anthropicHTTPUpstreamRecorder struct {
 	err      error
 }
 
+func testHeaderValue(headers http.Header, key string) string {
+	if values := headers[key]; len(values) > 0 {
+		return strings.Join(values, ",")
+	}
+	if values := headers[http.CanonicalHeaderKey(key)]; len(values) > 0 {
+		return strings.Join(values, ",")
+	}
+	return headers.Get(key)
+}
+
 func newAnthropicAPIKeyAccountForTest() *Account {
 	return &Account{
 		ID:          201,
@@ -179,8 +189,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, upstream.lastReq.Header.Get("authorization"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-goog-api-key"))
 	require.Empty(t, upstream.lastReq.Header.Get("cookie"))
-	require.Equal(t, "2023-06-01", upstream.lastReq.Header.Get("anthropic-version"))
-	require.Equal(t, "interleaved-thinking-2025-05-14", upstream.lastReq.Header.Get("anthropic-beta"))
+	require.Equal(t, "2023-06-01", testHeaderValue(upstream.lastReq.Header, "anthropic-version"))
+	require.Equal(t, "interleaved-thinking-2025-05-14", testHeaderValue(upstream.lastReq.Header, "anthropic-beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-stainless-lang"), "API Key 透传不应注入 OAuth 指纹头")
 
 	require.Contains(t, rec.Body.String(), `"cached_tokens":7`)
@@ -686,7 +696,7 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.NoError(t, err)
 	require.Equal(t, "Bearer oauth-token", req.Header.Get("authorization"))
 	require.Contains(t, strings.Join(req.Header["anthropic-beta"], ","), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
-	require.Equal(t, "br, gzip, deflate", req.Header.Get("accept-encoding"))
+	require.Equal(t, "gzip, deflate, br, zstd", req.Header.Get("accept-encoding"))
 }
 
 func TestGatewayService_BuildUpstreamRequest_PlacesStreamAfterSystemForAnthropic(t *testing.T) {
@@ -813,7 +823,7 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
 			require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("authorization"))
-			require.Contains(t, upstream.lastReq.Header.Get("anthropic-beta"), claude.BetaOAuth)
+			require.Contains(t, testHeaderValue(upstream.lastReq.Header, "anthropic-beta"), claude.BetaOAuth)
 
 			system := gjson.GetBytes(upstream.lastBody, "system")
 			require.True(t, system.Exists())
