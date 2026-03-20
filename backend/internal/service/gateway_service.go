@@ -6266,9 +6266,6 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request, isStream bool) {
 			req.Header.Set(key, value)
 		}
 	}
-	if isStream && req.Header.Get("x-stainless-helper-method") == "" {
-		req.Header.Set("x-stainless-helper-method", "stream")
-	}
 }
 
 func mergeAnthropicBeta(required []string, incoming string) string {
@@ -6573,9 +6570,6 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
 	req.Header.Set("accept", "application/json")
-	if isStream {
-		req.Header.Set("x-stainless-helper-method", "stream")
-	}
 }
 
 func truncateForLog(b []byte, maxBytes int) string {

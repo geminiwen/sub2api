@@ -181,6 +181,48 @@ func TestBuildCountTokensRequest_DefaultsForNonHaiku(t *testing.T) {
 	)
 }
 
+func TestBuildUpstreamRequest_StreamDoesNotInjectStainlessHelperMethod(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{}
+	account := &Account{
+		Type: AccountTypeOAuth,
+	}
+
+	req, err := svc.buildUpstreamRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-5",
+		true,
+		false,
+	)
+	require.NoError(t, err)
+	require.Empty(t, testHeaderValue(req.Header, "x-stainless-helper-method"))
+
+	c.Request.Header.Set("X-Stainless-Helper-Method", "stream")
+	req, err = svc.buildUpstreamRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-5",
+		true,
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "stream", testHeaderValue(req.Header, "x-stainless-helper-method"))
+}
+
 func TestDefaultBetaPolicySettings_DoesNotFilterContext1M(t *testing.T) {
 	settings := DefaultBetaPolicySettings()
 	for _, rule := range settings.Rules {
