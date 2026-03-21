@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
@@ -140,6 +141,9 @@ func TestOAuthService_GenerateAuthURL(t *testing.T) {
 	}
 	if result.AuthURL == "" {
 		t.Fatal("AuthURL 为空")
+	}
+	if strings.Contains(result.AuthURL, "org%3Acreate_api_key") || strings.Contains(result.AuthURL, "org:create_api_key") {
+		t.Fatalf("AuthURL 不应包含 org:create_api_key: %q", result.AuthURL)
 	}
 	if result.SessionID == "" {
 		t.Fatal("SessionID 为空")
@@ -591,6 +595,75 @@ func TestOAuthService_ExchangeCode_NilOrg(t *testing.T) {
 	}
 	if tokenInfo.AccountUUID != "" {
 		t.Fatalf("AccountUUID 应为空: got=%q", tokenInfo.AccountUUID)
+	}
+}
+
+func TestOAuthService_CookieAuth_UsesFileUploadScope(t *testing.T) {
+	t.Parallel()
+
+	client := &mockClaudeOAuthClient{
+		getOrgUUIDFunc: func(ctx context.Context, sessionKey, proxyURL string) (string, error) {
+			if sessionKey != "session-key" {
+				t.Fatalf("sessionKey 不匹配: got=%q", sessionKey)
+			}
+			return "org-uuid", nil
+		},
+		getAuthCodeFunc: func(ctx context.Context, sessionKey, orgUUID, scope, codeChallenge, state, proxyURL string) (string, error) {
+			if orgUUID != "org-uuid" {
+				t.Fatalf("orgUUID 不匹配: got=%q", orgUUID)
+			}
+			if scope != oauth.ScopeAPI {
+				t.Fatalf("scope 不匹配: got=%q want=%q", scope, oauth.ScopeAPI)
+			}
+			if !strings.Contains(scope, "user:file_upload") {
+				t.Fatalf("scope 缺少 user:file_upload: %q", scope)
+			}
+			if codeChallenge == "" {
+				t.Fatal("codeChallenge 不应为空")
+			}
+			if state == "" {
+				t.Fatal("state 不应为空")
+			}
+			return "auth-code", nil
+		},
+		exchangeCodeFunc: func(ctx context.Context, code, codeVerifier, state, proxyURL string, isSetupToken bool) (*oauth.TokenResponse, error) {
+			if code != "auth-code" {
+				t.Fatalf("code 不匹配: got=%q", code)
+			}
+			if codeVerifier == "" {
+				t.Fatal("codeVerifier 不应为空")
+			}
+			if state == "" {
+				t.Fatal("state 不应为空")
+			}
+			if isSetupToken {
+				t.Fatal("CookieAuth 默认不应走 setup token")
+			}
+			return &oauth.TokenResponse{
+				AccessToken:  "access-token",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: "refresh-token",
+				Scope:        oauth.ScopeAPI,
+			}, nil
+		},
+	}
+
+	svc := NewOAuthService(&mockProxyRepoForOAuth{}, client)
+	defer svc.Stop()
+
+	tokenInfo, err := svc.CookieAuth(context.Background(), &CookieAuthInput{
+		SessionKey: "session-key",
+		Scope:      "full",
+	})
+	if err != nil {
+		t.Fatalf("CookieAuth 返回错误: %v", err)
+	}
+	if tokenInfo.AccessToken != "access-token" {
+		t.Fatalf("AccessToken 不匹配: got=%q", tokenInfo.AccessToken)
+	}
+	if tokenInfo.OrgUUID != "org-uuid" {
+		t.Fatalf("OrgUUID 不匹配: got=%q", tokenInfo.OrgUUID)
 	}
 }
 
