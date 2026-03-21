@@ -3,6 +3,7 @@ package repository
 import (
 	"compress/flate"
 	"compress/gzip"
+	"compress/lzw"
 	"compress/zlib"
 	"errors"
 	"fmt"
@@ -328,6 +329,15 @@ func wrapDecoder(body io.ReadCloser, encoding string) (io.ReadCloser, error) {
 			Reader: flateReader,
 			closeFn: func() error {
 				_ = flateReader.Close()
+				return body.Close()
+			},
+		}, nil
+	case "compress":
+		reader := lzw.NewReader(body, lzw.MSB, 8)
+		return &decoderReadCloser{
+			Reader: reader,
+			closeFn: func() error {
+				_ = reader.Close()
 				return body.Close()
 			},
 		}, nil

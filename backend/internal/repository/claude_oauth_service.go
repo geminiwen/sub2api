@@ -208,17 +208,15 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 	reqBodyJSON, _ := json.Marshal(logredact.RedactMap(reqBody))
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 Request Body: %s", string(reqBodyJSON))
 
-	var tokenResp oauth.TokenResponse
-
 	resp, err := client.R().
 		SetContext(ctx).
+		DisableAutoReadResponse().
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Accept-Encoding", "gzip, compress, deflate, br").
 		SetHeader("Connection", "keep-alive").
 		SetHeader("Content-Type", "application/json").
 		SetHeader("User-Agent", "axios/1.13.6").
 		SetBody(reqBody).
-		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
 	if err != nil {
@@ -226,10 +224,21 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
-	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 Response - Status: %d, Body: %s", resp.StatusCode, logredact.RedactJSON(resp.Bytes()))
+	body, err := readDecodedReqResponseBody(resp)
+	if err != nil {
+		logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 FAILED - Decode error: %v", err)
+		return nil, fmt.Errorf("decode token response: %w", err)
+	}
+
+	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 Response - Status: %d, Body: %s", resp.StatusCode, logredact.RedactJSON(body))
 
 	if !resp.IsSuccessState() {
-		return nil, fmt.Errorf("token exchange failed: status %d, body: %s", resp.StatusCode, resp.String())
+		return nil, fmt.Errorf("token exchange failed: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp oauth.TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("decode token JSON: %w", err)
 	}
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 SUCCESS - Got access token")
@@ -248,28 +257,46 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		"client_id":     oauth.ClientID,
 	}
 
-	var tokenResp oauth.TokenResponse
-
 	resp, err := client.R().
 		SetContext(ctx).
+		DisableAutoReadResponse().
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Accept-Encoding", "gzip, compress, deflate, br").
 		SetHeader("Connection", "keep-alive").
 		SetHeader("Content-Type", "application/json").
 		SetHeader("User-Agent", "axios/1.13.6").
 		SetBody(reqBody).
-		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
+	body, err := readDecodedReqResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("decode token response: %w", err)
+	}
+
 	if !resp.IsSuccessState() {
-		return nil, fmt.Errorf("token refresh failed: status %d, body: %s", resp.StatusCode, resp.String())
+		return nil, fmt.Errorf("token refresh failed: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp oauth.TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("decode token JSON: %w", err)
 	}
 
 	return &tokenResp, nil
+}
+
+func readDecodedReqResponseBody(resp *req.Response) ([]byte, error) {
+	if resp == nil || resp.Response == nil {
+		return nil, fmt.Errorf("empty response")
+	}
+	if err := decodeResponseBody(resp.Response); err != nil {
+		return nil, err
+	}
+	return resp.ToBytes()
 }
 
 func createReqClient(proxyURL string) (*req.Client, error) {

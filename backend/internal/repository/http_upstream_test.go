@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/lzw"
 	"compress/zlib"
 	"io"
 	"net/http"
@@ -214,6 +215,27 @@ func (s *HTTPUpstreamSuite) TestDo_DecodesDeflateResponse() {
 	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
 }
 
+func (s *HTTPUpstreamSuite) TestDo_DecodesCompressResponse() {
+	payload := compressWithCompress(s.T(), []byte("compress-body"))
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "compress")
+		_, _ = w.Write(payload)
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	up := NewHTTPUpstream(s.cfg)
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/compress", nil)
+	require.NoError(s.T(), err)
+	resp, err := up.Do(req, "", 1, 1)
+	require.NoError(s.T(), err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "compress-body", string(body))
+	require.Empty(s.T(), resp.Header.Get("Content-Encoding"))
+}
+
 func (s *HTTPUpstreamSuite) TestDo_DecodesBrotliResponse() {
 	payload := compressWithBrotli([]byte("brotli-body"))
 	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +425,16 @@ func compressWithDeflate(t *testing.T, payload []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
+	_, err := w.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+func compressWithCompress(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := lzw.NewWriter(&buf, lzw.MSB, 8)
 	_, err := w.Write(payload)
 	require.NoError(t, err)
 	require.NoError(t, w.Close())

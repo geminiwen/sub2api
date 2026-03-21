@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -254,6 +256,23 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			},
 		},
 		{
+			name: "gzip_response_is_decoded",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				writeGzipJSONResponse(s.T(), w, oauth.TokenResponse{
+					AccessToken:  "gzip_at",
+					TokenType:    "bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "gzip_rt",
+				})
+			},
+			code:         "AUTH",
+			isSetupToken: false,
+			wantResp: &oauth.TokenResponse{
+				AccessToken:  "gzip_at",
+				RefreshToken: "gzip_rt",
+			},
+		},
+		{
 			name: "non_200_returns_error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
@@ -358,6 +377,21 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			},
 		},
 		{
+			name: "gzip_response_is_decoded",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				writeGzipJSONResponse(s.T(), w, oauth.TokenResponse{
+					AccessToken:  "gzip_access_token",
+					TokenType:    "bearer",
+					ExpiresIn:    28800,
+					RefreshToken: "gzip_refresh_token",
+				})
+			},
+			wantResp: &oauth.TokenResponse{
+				AccessToken:  "gzip_access_token",
+				RefreshToken: "gzip_refresh_token",
+			},
+		},
+		{
 			name: "non_200_returns_error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -406,4 +440,17 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 
 func TestClaudeOAuthServiceSuite(t *testing.T) {
 	suite.Run(t, new(ClaudeOAuthServiceSuite))
+}
+
+func writeGzipJSONResponse(t *testing.T, w http.ResponseWriter, payload any) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	require.NoError(t, json.NewEncoder(zw).Encode(payload))
+	require.NoError(t, zw.Close())
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
+	_, _ = w.Write(buf.Bytes())
 }
