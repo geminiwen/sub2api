@@ -62,6 +62,36 @@ const (
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 )
 
+func testClaudeCodeUserAgent() string {
+	return "claude-cli/2.1.81 (external, sdk-cli)"
+}
+
+func testClaudeBetaHeader(modelID string, useBearer bool) string {
+	lowerModelID := strings.ToLower(strings.TrimSpace(modelID))
+	isHaiku := strings.Contains(lowerModelID, "haiku")
+	isOpus := strings.Contains(lowerModelID, "opus")
+
+	if useBearer {
+		switch {
+		case isHaiku:
+			return claude.HaikuBetaHeader
+		case isOpus:
+			return claude.DefaultBetaHeaderWithContext1M
+		default:
+			return claude.DefaultBetaHeader
+		}
+	}
+
+	switch {
+	case isHaiku:
+		return claude.APIKeyHaikuBetaHeader
+	case isOpus:
+		return mergeAnthropicBeta(strings.Split(claude.APIKeyBetaHeader, ","), claude.BetaContext1M)
+	default:
+		return claude.APIKeyBetaHeader
+	}
+}
+
 // AccountTestService handles account testing operations
 type AccountTestService struct {
 	accountRepo               AccountRepository
@@ -114,8 +144,8 @@ func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error)
 }
 
 // generateSessionString generates a Claude Code style session string.
-// The output format is determined by the UA version in claude.DefaultHeaders,
-// ensuring consistency between the user_id format and the UA sent to upstream.
+// The output format is determined by the UA version sent to upstream,
+// ensuring consistency between the user_id format and the request headers.
 func generateSessionString() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -123,18 +153,20 @@ func generateSessionString() (string, error) {
 	}
 	hex64 := hex.EncodeToString(b)
 	sessionUUID := uuid.New().String()
-	uaVersion := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
+	uaVersion := ExtractCLIVersion(testClaudeCodeUserAgent())
 	return FormatMetadataUserID(hex64, "", sessionUUID, uaVersion), nil
 }
 
-// createTestPayload creates a Claude Code style test request payload
-func createTestPayload(modelID string) (map[string]any, error) {
+// createTestPayload creates a Claude Code style test request payload.
+// It includes the billing header system block so upstream sees the same
+// Claude Code markers that the gateway injects for normal Anthropic traffic.
+func createTestPayload(modelID string) ([]byte, error) {
 	sessionID, err := generateSessionString()
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]any{
+	payload := map[string]any{
 		"model": modelID,
 		"messages": []map[string]any{
 			{
@@ -165,7 +197,26 @@ func createTestPayload(modelID string) (map[string]any, error) {
 		"max_tokens":  1024,
 		"temperature": 1,
 		"stream":      true,
-	}, nil
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	system := payload["system"].([]map[string]any)
+	system = append(system, map[string]any{
+		"type": "text",
+		"text": buildAnthropicBillingHeader(payloadBytes, testClaudeCodeUserAgent()),
+	})
+	payload["system"] = system
+
+	payloadBytes, err = json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return applyAnthropicBillingCCH(payloadBytes, "/v1/messages"), nil
 }
 
 // TestAccountConnection tests an account's connection by sending a test request
@@ -262,11 +313,10 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	c.Writer.Flush()
 
 	// Create Claude Code style payload (same for all account types)
-	payload, err := createTestPayload(testModelID)
+	payloadBytes, err := createTestPayload(testModelID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
-	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -284,13 +334,14 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	for key, value := range claude.DefaultHeaders {
 		req.Header.Set(key, value)
 	}
+	req.Header.Set("User-Agent", testClaudeCodeUserAgent())
 
 	// Set authentication header
 	if useBearer {
-		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+		req.Header.Set("anthropic-beta", testClaudeBetaHeader(testModelID, true))
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
-		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+		req.Header.Set("anthropic-beta", testClaudeBetaHeader(testModelID, false))
 		req.Header.Set("x-api-key", authToken)
 	}
 	normalizeClaudeHeaderCaseForWire(req.Header)
