@@ -6318,8 +6318,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			applyClaudeCodeMimicHeaders(req, reqStream)
 
 			incomingBeta := req.Header.Get("anthropic-beta")
-			requiredBetas := strings.Split(s.getBetaHeader(modelID, ""), ",")
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
+			beta := s.getBetaHeader(modelID, incomingBeta)
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, effectiveDropSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，同时补齐必需的默认 beta
 			clientBetaHeader := req.Header.Get("anthropic-beta")
@@ -6359,6 +6359,8 @@ func (s *GatewayService) getBetaHeader(modelID string, clientBetaHeader string) 
 	defaultBetaHeader := claude.DefaultBetaHeader
 	if isHaikuModel {
 		defaultBetaHeader = claude.HaikuBetaHeader
+	} else if containsBetaToken(clientBetaHeader, claude.BetaContext1M) {
+		defaultBetaHeader = claude.DefaultBetaHeaderWithContext1M
 	}
 
 	// 如果客户端传了anthropic-beta
@@ -6374,6 +6376,8 @@ func (s *GatewayService) getCountTokensBetaHeader(modelID string, clientBetaHead
 	defaultBetaHeader := claude.CountTokensBetaHeader
 	if strings.Contains(strings.ToLower(modelID), "haiku") {
 		defaultBetaHeader = claude.HaikuCountTokensBetaHeader
+	} else if containsBetaToken(clientBetaHeader, claude.BetaContext1M) {
+		defaultBetaHeader = claude.CountTokensBetaHeaderWithContext1M
 	}
 	if clientBetaHeader != "" {
 		return mergeAnthropicBeta(strings.Split(defaultBetaHeader, ","), clientBetaHeader)
@@ -8932,8 +8936,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			applyClaudeCodeMimicHeaders(req, false)
 
 			incomingBeta := req.Header.Get("anthropic-beta")
-			requiredBetas := strings.Split(s.getCountTokensBetaHeader(modelID, ""), ",")
-			req.Header.Set("anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
+			beta := s.getCountTokensBetaHeader(modelID, incomingBeta)
+			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
 		} else {
 			beta := s.getCountTokensBetaHeader(modelID, req.Header.Get("anthropic-beta"))
 			req.Header.Set("anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))

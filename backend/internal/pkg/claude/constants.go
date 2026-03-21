@@ -23,8 +23,13 @@ const (
 // 这些 token 是客户端特有的，不应透传给上游 API。
 var DroppedBetas = []string{}
 
-// DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
-const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvancedToolUse + "," + BetaEffort
+// DefaultBetaHeader Claude Code OAuth 默认的 anthropic-beta header。
+// context-1m is optional and only added when the client explicitly sends it.
+const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvancedToolUse + "," + BetaEffort
+
+// DefaultBetaHeaderWithContext1M preserves the canonical token order when
+// clients explicitly request context-1m.
+const DefaultBetaHeaderWithContext1M = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvancedToolUse + "," + BetaEffort
 
 // MessageBetaHeaderNoTools /v1/messages 在无工具时的 beta header
 //
@@ -40,8 +45,13 @@ const MessageBetaHeaderWithTools = DefaultBetaHeader
 // HaikuBetaHeader OAuth Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）
 const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope
 
-// CountTokensBetaHeader 非 Haiku 模型的 count_tokens 请求使用的 anthropic-beta header
-const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting
+// CountTokensBetaHeader 非 Haiku 模型的 count_tokens 请求使用的 anthropic-beta header。
+// context-1m is optional and only added when the client explicitly sends it.
+const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting
+
+// CountTokensBetaHeaderWithContext1M preserves the canonical token order when
+// clients explicitly request context-1m.
+const CountTokensBetaHeaderWithContext1M = BetaClaudeCode + "," + BetaOAuth + "," + BetaContext1M + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting
 
 // HaikuCountTokensBetaHeader Haiku 模型的 count_tokens 请求使用的 anthropic-beta header
 const HaikuCountTokensBetaHeader = BetaOAuth + "," + BetaInterleavedThinking + "," + BetaRedactThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaTokenCounting

@@ -21,7 +21,7 @@ func TestGetBetaHeader_InjectsRequiredDefaultBetas(t *testing.T) {
 
 	require.Equal(
 		t,
-		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
 		got,
 	)
 }
@@ -33,7 +33,7 @@ func TestGetBetaHeader_UsesExpectedDefaultsWhenIncomingBetaMissing(t *testing.T)
 
 	require.Equal(
 		t,
-		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
 		got,
 	)
 }
@@ -72,7 +72,7 @@ func TestGetBetaHeader_PreservesExtraTokensBeyondDefaults(t *testing.T) {
 
 	require.Equal(
 		t,
-		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,custom-beta",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,custom-beta",
 		got,
 	)
 }
@@ -87,7 +87,22 @@ func TestGetBetaHeader_NonHaikuWithSpecificIncomingBetas(t *testing.T) {
 
 	require.Equal(
 		t,
-		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		got,
+	)
+}
+
+func TestGetBetaHeader_PlacesOptionalContext1MInCanonicalPosition(t *testing.T) {
+	svc := &GatewayService{}
+
+	got := svc.getBetaHeader(
+		"claude-sonnet-4-5",
+		"context-1m-2025-08-07,claude-code-20250219,custom-beta",
+	)
+
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,custom-beta",
 		got,
 	)
 }
@@ -179,7 +194,38 @@ func TestBuildCountTokensRequest_DefaultsForNonHaiku(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",
+		testHeaderValue(req.Header, "anthropic-beta"),
+	)
+}
+
+func TestBuildCountTokensRequest_PlacesOptionalContext1MInCanonicalPosition(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	c.Request.Header.Set("anthropic-beta", "context-1m-2025-08-07,custom-beta")
+
+	svc := &GatewayService{}
+	account := &Account{
+		Type: AccountTypeOAuth,
+	}
+
+	req, err := svc.buildCountTokensRequest(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-5",
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01,custom-beta",
 		testHeaderValue(req.Header, "anthropic-beta"),
 	)
 }
