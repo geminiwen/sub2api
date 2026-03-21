@@ -142,8 +142,8 @@ func TestOAuthService_GenerateAuthURL(t *testing.T) {
 	if result.AuthURL == "" {
 		t.Fatal("AuthURL 为空")
 	}
-	if strings.Contains(result.AuthURL, "org%3Acreate_api_key") || strings.Contains(result.AuthURL, "org:create_api_key") {
-		t.Fatalf("AuthURL 不应包含 org:create_api_key: %q", result.AuthURL)
+	if !strings.Contains(result.AuthURL, "org%3Acreate_api_key") && !strings.Contains(result.AuthURL, "org:create_api_key") {
+		t.Fatalf("AuthURL 应包含 org:create_api_key: %q", result.AuthURL)
 	}
 	if result.SessionID == "" {
 		t.Fatal("SessionID 为空")
@@ -614,6 +614,9 @@ func TestOAuthService_CookieAuth_UsesFileUploadScope(t *testing.T) {
 			}
 			if scope != oauth.ScopeAPI {
 				t.Fatalf("scope 不匹配: got=%q want=%q", scope, oauth.ScopeAPI)
+			}
+			if !strings.Contains(scope, "org:create_api_key") {
+				t.Fatalf("scope 缺少 org:create_api_key: %q", scope)
 			}
 			if !strings.Contains(scope, "user:file_upload") {
 				t.Fatalf("scope 缺少 user:file_upload: %q", scope)

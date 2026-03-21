@@ -176,9 +176,8 @@ func (s *OAuthService) CookieAuth(ctx context.Context, input *CookieAuthInput) (
 		}
 	}
 
-	// Determine scope and if this is a setup token
-	// Internal API call uses ScopeAPI (org:create_api_key not supported)
-	scope := oauth.ScopeAPI
+		// Determine scope and if this is a setup token
+		scope := oauth.ScopeAPI
 	isSetupToken := false
 	if input.Scope == "inference" {
 		scope = oauth.ScopeInference
