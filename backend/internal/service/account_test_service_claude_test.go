@@ -84,10 +84,13 @@ func TestCreateTestPayload_HaikuThinkingShape(t *testing.T) {
 			BudgetTokens int    `json:"budget_tokens"`
 		} `json:"thinking"`
 	}
+	var raw map[string]any
 
 	require.NoError(t, json.Unmarshal(payload, &parsed))
+	require.NoError(t, json.Unmarshal(payload, &raw))
 	require.Equal(t, "enabled", parsed.Thinking.Type)
 	require.Equal(t, 31999, parsed.Thinking.BudgetTokens)
+	require.NotContains(t, raw, "output_config")
 }
 
 func TestTestClaudeBetaHeader_ByModel(t *testing.T) {

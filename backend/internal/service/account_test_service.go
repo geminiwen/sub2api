@@ -231,10 +231,12 @@ func createTestPayload(modelID string, deviceID string, accountUUID string) ([]b
 		"max_tokens": 32000,
 		"tools":      []any{},
 		"thinking":   buildTestThinkingConfig(modelID),
-		"output_config": map[string]any{
+		"stream":     true,
+	}
+	if !strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "haiku") {
+		payload["output_config"] = map[string]any{
 			"effort": "medium",
-		},
-		"stream": true,
+		}
 	}
 
 	payloadBytes, err := json.Marshal(payload)
