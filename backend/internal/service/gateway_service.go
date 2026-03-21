@@ -4227,7 +4227,15 @@ func resolveBillingHeaderCLIVersion(userAgent string) string {
 	if version := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"]); version != "" {
 		return version
 	}
-	return "2.1.80"
+	return claude.DefaultCLIVersion
+}
+
+func resolveClaudeMimicUserAgent(userAgent string) string {
+	userAgent = strings.TrimSpace(userAgent)
+	if strings.EqualFold(extractProduct(userAgent), "claude-cli") && ExtractCLIVersion(userAgent) != "" {
+		return userAgent
+	}
+	return claude.DefaultCLIUserAgent
 }
 
 func extractFirstUserTextBlock(body []byte) string {
@@ -4733,6 +4741,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		if oauthFingerprint != nil && strings.TrimSpace(oauthFingerprint.UserAgent) != "" {
 			userAgent = oauthFingerprint.UserAgent
+		}
+		if shouldMimicClaudeCode {
+			userAgent = resolveClaudeMimicUserAgent(userAgent)
 		}
 		body = upsertAnthropicBillingHeaderSystemBlock(body, userAgent, requestPath)
 	}
@@ -6317,7 +6328,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// 非 Claude Code 客户端：按 opencode 的策略处理：
 			// - 强制 Claude Code 指纹相关请求头（尤其是 user-agent/x-stainless/x-app）
 			// - 保留 incoming beta 的同时，确保 OAuth 所需 beta 存在
-			applyClaudeCodeMimicHeaders(req, reqStream)
+			applyClaudeCodeMimicHeaders(req, reqStream, req.Header.Get("user-agent"))
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			beta := s.getBetaHeader(modelID, incomingBeta)
@@ -6719,16 +6730,20 @@ var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
 // headers when using Claude Code-scoped OAuth credentials.
-func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
+func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, preferredUserAgent string) {
 	if req == nil {
 		return
 	}
+	mimicUserAgent := resolveClaudeMimicUserAgent(preferredUserAgent)
 	// Start with the standard defaults (fill missing).
 	applyClaudeOAuthHeaderDefaults(req, isStream)
 	// Then force key headers to match Claude Code fingerprint regardless of what the client sent.
 	for key, value := range claude.DefaultHeaders {
 		if value == "" {
 			continue
+		}
+		if strings.EqualFold(key, "User-Agent") {
+			value = mimicUserAgent
 		}
 		req.Header.Set(key, value)
 	}
@@ -8935,7 +8950,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// OAuth 账号：处理 anthropic-beta header
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			applyClaudeCodeMimicHeaders(req, false)
+			applyClaudeCodeMimicHeaders(req, false, req.Header.Get("user-agent"))
 
 			incomingBeta := req.Header.Get("anthropic-beta")
 			beta := s.getCountTokensBetaHeader(modelID, incomingBeta)

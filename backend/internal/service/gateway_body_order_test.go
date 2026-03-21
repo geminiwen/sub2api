@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,7 +94,7 @@ func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
 func TestUpsertAnthropicBillingHeaderSystemBlock_PreservesTopLevelFieldOrder(t *testing.T) {
 	body := []byte(`{"alpha":1,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=0; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":"hello world"}],"omega":2}`)
 
-	result := upsertAnthropicBillingHeaderSystemBlock(body, "claude-cli/2.1.80 (external, cli)", "/v1/messages")
+	result := upsertAnthropicBillingHeaderSystemBlock(body, claude.DefaultCLIUserAgent, "/v1/messages")
 	resultStr := string(result)
 
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"system"`, `"messages"`, `"omega"`)

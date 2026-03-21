@@ -2,6 +2,10 @@
 package claude
 
 // Claude Code 客户端相关常量
+const (
+	DefaultCLIVersion   = "2.1.81"
+	DefaultCLIUserAgent = "claude-cli/" + DefaultCLIVersion + " (external, cli)"
+)
 
 // Beta header 常量
 const (
@@ -66,7 +70,7 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	"User-Agent":                                "claude-cli/2.1.80 (external, cli)",
+	"User-Agent":                                DefaultCLIUserAgent,
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.74.0",
 	"X-Stainless-OS":                            "MacOS",

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -280,4 +281,23 @@ func TestResolveClaudeCLIEntrypoint_FromUserAgent(t *testing.T) {
 			require.Equal(t, tc.want, resolveClaudeCLIEntrypoint(tc.ua))
 		})
 	}
+}
+
+func TestResolveClaudeMimicUserAgent_PrefersCachedClaudeCLIVersion(t *testing.T) {
+	require.Equal(t, "claude-cli/2.1.90 (external, cli)", resolveClaudeMimicUserAgent("claude-cli/2.1.90 (external, cli)"))
+}
+
+func TestResolveClaudeMimicUserAgent_FallsBackToDefaultForNonClaudeCLI(t *testing.T) {
+	require.Equal(t, claude.DefaultCLIUserAgent, resolveClaudeMimicUserAgent("curl/8.0.1"))
+}
+
+func TestApplyClaudeCodeMimicHeaders_PreservesPreferredClaudeCLIVersion(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	require.NoError(t, err)
+
+	req.Header.Set("user-agent", "claude-cli/2.1.90 (external, cli)")
+	applyClaudeCodeMimicHeaders(req, true, req.Header.Get("user-agent"))
+
+	require.Equal(t, "claude-cli/2.1.90 (external, cli)", req.Header.Get("user-agent"))
+	require.Equal(t, "cli", req.Header.Get("x-app"))
 }
