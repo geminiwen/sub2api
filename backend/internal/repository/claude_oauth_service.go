@@ -20,16 +20,18 @@ import (
 
 func NewClaudeOAuthClient() service.ClaudeOAuthClient {
 	return &claudeOAuthService{
-		baseURL:       "https://claude.ai",
-		tokenURL:      oauth.TokenURL,
-		clientFactory: createReqClient,
+		baseURL:            "https://claude.ai",
+		tokenURL:           oauth.TokenURL,
+		clientFactory:      createReqClient,
+		tokenClientFactory: createTokenReqClient,
 	}
 }
 
 type claudeOAuthService struct {
-	baseURL       string
-	tokenURL      string
-	clientFactory func(proxyURL string) (*req.Client, error)
+	baseURL            string
+	tokenURL           string
+	clientFactory      func(proxyURL string) (*req.Client, error)
+	tokenClientFactory func(proxyURL string) (*req.Client, error)
 }
 
 func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey, proxyURL string) (string, error) {
@@ -172,7 +174,7 @@ func (s *claudeOAuthService) GetAuthorizationCode(ctx context.Context, sessionKe
 }
 
 func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, codeVerifier, state, proxyURL string, isSetupToken bool) (*oauth.TokenResponse, error) {
-	client, err := s.clientFactory(proxyURL)
+	client, err := s.tokenClientFactory(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("create HTTP client: %w", err)
 	}
@@ -211,8 +213,10 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 	resp, err := client.R().
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
+		SetHeader("Accept-Encoding", "gzip, compress, deflate, br").
+		SetHeader("Connection", "keep-alive").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.8.4").
+		SetHeader("User-Agent", "axios/1.13.6").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -233,7 +237,7 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 }
 
 func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*oauth.TokenResponse, error) {
-	client, err := s.clientFactory(proxyURL)
+	client, err := s.tokenClientFactory(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("create HTTP client: %w", err)
 	}
@@ -249,8 +253,10 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 	resp, err := client.R().
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
+		SetHeader("Accept-Encoding", "gzip, compress, deflate, br").
+		SetHeader("Connection", "keep-alive").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.8.4").
+		SetHeader("User-Agent", "axios/1.13.6").
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -272,6 +278,22 @@ func createReqClient(proxyURL string) (*req.Client, error) {
 		SetTimeout(60 * time.Second).
 		ImpersonateChrome().
 		SetCookieJar(nil) // 禁用 CookieJar
+
+	trimmed, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if trimmed != "" {
+		client.SetProxyURL(trimmed)
+	}
+
+	return client, nil
+}
+
+func createTokenReqClient(proxyURL string) (*req.Client, error) {
+	client := req.C().
+		SetTimeout(60 * time.Second).
+		SetCookieJar(nil)
 
 	trimmed, _, err := proxyurl.Parse(proxyURL)
 	if err != nil {

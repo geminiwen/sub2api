@@ -581,6 +581,13 @@ func (a *Account) GetExtraString(key string) string {
 	return ""
 }
 
+func (a *Account) GetAccountUUID() string {
+	if v := strings.TrimSpace(a.GetExtraString("account_uuid")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(a.GetCredential("account_uuid"))
+}
+
 func (a *Account) GetClaudeUserID() string {
 	if v := strings.TrimSpace(a.GetExtraString("claude_user_id")); v != "" {
 		return v

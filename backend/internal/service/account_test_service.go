@@ -60,6 +60,7 @@ type TestEvent struct {
 const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	testClaudeSystemPrompt       = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 )
 
 func testClaudeCodeUserAgent() string {
@@ -98,6 +99,7 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
+	identityService           *IdentityService
 	cfg                       *config.Config
 	soraTestGuardMu           sync.Mutex
 	soraTestLastRun           map[int64]time.Time
@@ -112,6 +114,7 @@ func NewAccountTestService(
 	geminiTokenProvider *GeminiTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
 	httpUpstream HTTPUpstream,
+	identityService *IdentityService,
 	cfg *config.Config,
 ) *AccountTestService {
 	return &AccountTestService{
@@ -119,6 +122,7 @@ func NewAccountTestService(
 		geminiTokenProvider:       geminiTokenProvider,
 		antigravityGatewayService: antigravityGatewayService,
 		httpUpstream:              httpUpstream,
+		identityService:           identityService,
 		cfg:                       cfg,
 		soraTestLastRun:           make(map[int64]time.Time),
 		soraTestCooldown:          defaultSoraTestCooldown,
@@ -146,32 +150,61 @@ func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error)
 // generateSessionString generates a Claude Code style session string.
 // The output format is determined by the UA version sent to upstream,
 // ensuring consistency between the user_id format and the request headers.
-func generateSessionString() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+func generateSessionString(deviceID, accountUUID string) (string, error) {
+	if strings.TrimSpace(deviceID) == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		deviceID = hex.EncodeToString(b)
 	}
-	hex64 := hex.EncodeToString(b)
 	sessionUUID := uuid.New().String()
 	uaVersion := ExtractCLIVersion(testClaudeCodeUserAgent())
-	return FormatMetadataUserID(hex64, "", sessionUUID, uaVersion), nil
+	return FormatMetadataUserID(deviceID, accountUUID, sessionUUID, uaVersion), nil
+}
+
+func buildTestSystemReminder(date string) string {
+	if strings.TrimSpace(date) == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	return fmt.Sprintf("<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is %s.\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n", date)
+}
+
+func buildTestThinkingConfig(modelID string) map[string]any {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "haiku") {
+		return map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 31999,
+		}
+	}
+	return map[string]any{
+		"type": "adaptive",
+	}
 }
 
 // createTestPayload creates a Claude Code style test request payload.
 // It includes the billing header system block so upstream sees the same
 // Claude Code markers that the gateway injects for normal Anthropic traffic.
-func createTestPayload(modelID string) ([]byte, error) {
-	sessionID, err := generateSessionString()
+func createTestPayload(modelID string, deviceID string, accountUUID string) ([]byte, error) {
+	sessionID, err := generateSessionString(deviceID, accountUUID)
 	if err != nil {
 		return nil, err
 	}
 
+	billingPlaceholder := map[string]any{
+		"type": "text",
+		"text": "",
+	}
 	payload := map[string]any{
 		"model": modelID,
 		"messages": []map[string]any{
 			{
 				"role": "user",
 				"content": []map[string]any{
+					{
+						"type": "text",
+						"text": buildTestSystemReminder(""),
+					},
 					{
 						"type": "text",
 						"text": "hi",
@@ -183,9 +216,10 @@ func createTestPayload(modelID string) ([]byte, error) {
 			},
 		},
 		"system": []map[string]any{
+			billingPlaceholder,
 			{
 				"type": "text",
-				"text": claudeCodeSystemPrompt,
+				"text": testClaudeSystemPrompt,
 				"cache_control": map[string]string{
 					"type": "ephemeral",
 				},
@@ -194,9 +228,13 @@ func createTestPayload(modelID string) ([]byte, error) {
 		"metadata": map[string]string{
 			"user_id": sessionID,
 		},
-		"max_tokens":  1024,
-		"temperature": 1,
-		"stream":      true,
+		"max_tokens": 32000,
+		"tools":      []any{},
+		"thinking":   buildTestThinkingConfig(modelID),
+		"output_config": map[string]any{
+			"effort": "medium",
+		},
+		"stream": true,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -205,10 +243,7 @@ func createTestPayload(modelID string) ([]byte, error) {
 	}
 
 	system := payload["system"].([]map[string]any)
-	system = append(system, map[string]any{
-		"type": "text",
-		"text": buildAnthropicBillingHeader(payloadBytes, testClaudeCodeUserAgent()),
-	})
+	system[0]["text"] = buildAnthropicBillingHeader(payloadBytes, testClaudeCodeUserAgent())
 	payload["system"] = system
 
 	payloadBytes, err = json.Marshal(payload)
@@ -217,6 +252,17 @@ func createTestPayload(modelID string) ([]byte, error) {
 	}
 
 	return applyAnthropicBillingCCH(payloadBytes, "/v1/messages"), nil
+}
+
+func (s *AccountTestService) resolveTestDeviceID(ctx context.Context, account *Account) string {
+	if s == nil || s.identityService == nil || account == nil {
+		return ""
+	}
+	fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, http.Header{})
+	if err != nil || fp == nil {
+		return ""
+	}
+	return strings.TrimSpace(fp.ClientID)
 }
 
 // TestAccountConnection tests an account's connection by sending a test request
@@ -313,7 +359,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	c.Writer.Flush()
 
 	// Create Claude Code style payload (same for all account types)
-	payloadBytes, err := createTestPayload(testModelID)
+	payloadBytes, err := createTestPayload(testModelID, s.resolveTestDeviceID(ctx, account), account.GetAccountUUID())
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
@@ -329,6 +375,8 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	// Set common headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("accept-encoding", "deflate, gzip, br, zstd")
 
 	// Apply Claude Code client headers
 	for key, value := range claude.DefaultHeaders {
@@ -442,7 +490,7 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, false)
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, account.IsTLSFingerprintEnabled())
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}

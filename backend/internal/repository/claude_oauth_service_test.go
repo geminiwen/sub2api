@@ -27,6 +27,7 @@ type requestCapture struct {
 	body        []byte
 	bodyJSON    map[string]any
 	contentType string
+	headers     http.Header
 }
 
 func newTestReqClient(rt http.RoundTripper) *req.Client {
@@ -223,6 +224,10 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
 				require.Equal(s.T(), oauth.RedirectURI, captured.bodyJSON["redirect_uri"])
 				require.Equal(s.T(), "ver", captured.bodyJSON["code_verifier"])
+				require.Equal(s.T(), "application/json, text/plain, */*", captured.headers.Get("Accept"))
+				require.Equal(s.T(), "gzip, compress, deflate, br", captured.headers.Get("Accept-Encoding"))
+				require.Equal(s.T(), "keep-alive", captured.headers.Get("Connection"))
+				require.Equal(s.T(), "axios/1.13.6", captured.headers.Get("User-Agent"))
 				// Regular OAuth should not include expires_in
 				require.Nil(s.T(), captured.bodyJSON["expires_in"], "regular OAuth should not include expires_in")
 			},
@@ -267,6 +272,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
+				captured.headers = r.Header.Clone()
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)
@@ -277,6 +283,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			s.client = client
 			s.client.tokenURL = "http://in-process/token"
 			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
+			s.client.tokenClientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			resp, err := s.client.ExchangeCodeForToken(context.Background(), tt.code, "ver", "", "", tt.isSetupToken)
 
@@ -328,6 +335,10 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 				require.Equal(s.T(), "refresh_token", captured.bodyJSON["grant_type"])
 				require.Equal(s.T(), "rt", captured.bodyJSON["refresh_token"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
+				require.Equal(s.T(), "application/json, text/plain, */*", captured.headers.Get("Accept"))
+				require.Equal(s.T(), "gzip, compress, deflate, br", captured.headers.Get("Accept-Encoding"))
+				require.Equal(s.T(), "keep-alive", captured.headers.Get("Connection"))
+				require.Equal(s.T(), "axios/1.13.6", captured.headers.Get("User-Agent"))
 			},
 		},
 		{
@@ -363,6 +374,7 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
+				captured.headers = r.Header.Clone()
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)
@@ -373,6 +385,7 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			s.client = client
 			s.client.tokenURL = "http://in-process/token"
 			s.client.clientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
+			s.client.tokenClientFactory = func(string) (*req.Client, error) { return newTestReqClient(rt), nil }
 
 			resp, err := s.client.RefreshToken(context.Background(), "rt", "")
 
