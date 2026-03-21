@@ -559,15 +559,16 @@ sudo systemctl status redis
 
 ## TLS Fingerprint Configuration
 
-Sub2API supports TLS fingerprint simulation to make requests appear as if they come from the official Claude CLI (Node.js client).
+Sub2API supports TLS fingerprint simulation to make requests appear as if they come from the native Claude Code client.
 
 > **💡 Tip:** Visit **[tls.sub2api.org](https://tls.sub2api.org/)** to get TLS fingerprint information for different devices and browsers.
 
 ### Default Behavior
 
-- Built-in `claude_cli_v2` profile simulates Node.js 20.x + OpenSSL 3.x
-- JA3 Hash: `1a28e69016765d92e3b381168d68922c`
-- JA4: `t13d5911h1_a33745022dd6_1f22a2ca17c4`
+- Built-in `claude_cli_v2` profile simulates Claude Code native 2.1.80 (Bun runtime)
+- JA3 Hash: `44f88fca027f27bab4bb08d4af15f23e`
+- JA3: `771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49161-49171-49162-49172-156-157-47-53,0-65037-23-65281-10-11-35-16-5-13-18-51-45-43,29-23-24,0`
+- Extension `65037` is ECH GREASE, modeled with uTLS `BoringGREASEECH()`
 - Profile selection: `accountID % profileCount`
 
 ### Configuration
@@ -601,13 +602,13 @@ gateway:
 |-------|------|-------------|
 | `name` | string | Display name (required) |
 | `cipher_suites` | []uint16 | Cipher suites in decimal. Empty = default |
-| `curves` | []uint16 | Elliptic curves in decimal. Empty = default |
+| `curves` | []uint16 | Supported groups in decimal. Empty = default |
 | `point_formats` | []uint8 | EC point formats. Empty = default |
 
 ### Common Values Reference
 
 **Cipher Suites (TLS 1.3):** `4865` (AES_128_GCM), `4866` (AES_256_GCM), `4867` (CHACHA20)
 
-**Cipher Suites (TLS 1.2):** `49195`, `49196`, `49199`, `49200` (ECDHE variants)
+**Cipher Suites (TLS 1.2):** `49195`, `49199`, `49196`, `49200`, `52393`, `52392`, `49161`, `49171`, `49162`, `49172`, `156`, `157`, `47`, `53`
 
-**Curves:** `29` (X25519), `23` (P-256), `24` (P-384), `25` (P-521)
+**Curves:** `29` (X25519), `23` (P-256), `24` (P-384)

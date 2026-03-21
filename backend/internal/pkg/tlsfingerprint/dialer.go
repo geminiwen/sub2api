@@ -1,10 +1,11 @@
 // Package tlsfingerprint provides TLS fingerprint simulation for HTTP clients.
-// It uses the utls library to create TLS connections that mimic Node.js/Claude Code clients.
+// It uses the utls library to create TLS connections that mimic native Claude Code clients.
 package tlsfingerprint
 
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -45,154 +46,60 @@ type SOCKS5ProxyDialer struct {
 	proxyURL *url.URL
 }
 
-// Default TLS fingerprint values captured from Claude CLI 2.x (Node.js 20.x + OpenSSL 3.x)
-// Captured using: tshark -i lo -f "tcp port 8443" -Y "tls.handshake.type == 1" -V
-// JA3 Hash: 1a28e69016765d92e3b381168d68922c
+// Default TLS fingerprint values captured from Claude Code native 2.1.80 (Bun runtime).
+// Captured using a ClientHello trace on 2026-03-21.
+// JA3 Hash: 44f88fca027f27bab4bb08d4af15f23e
 //
 // Note: JA3/JA4 may have slight variations due to:
 // - Session ticket presence/absence
 // - Extension negotiation state
 var (
-	// defaultCipherSuites contains all 59 cipher suites from Claude CLI
+	// defaultCipherSuites must keep the captured order exactly.
 	// Order is critical for JA3 fingerprint matching
 	defaultCipherSuites = []uint16{
-		// TLS 1.3 cipher suites (MUST be first)
+		0x1301, // TLS_AES_128_GCM_SHA256
 		0x1302, // TLS_AES_256_GCM_SHA384
 		0x1303, // TLS_CHACHA20_POLY1305_SHA256
-		0x1301, // TLS_AES_128_GCM_SHA256
 
-		// ECDHE + AES-GCM
-		0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
 		0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-		0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+		0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
 		0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-
-		// DHE + AES-GCM
-		0x009e, // TLS_DHE_RSA_WITH_AES_128_GCM_SHA256
-
-		// ECDHE/DHE + AES-CBC-SHA256/384
-		0xc027, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
-		0x0067, // TLS_DHE_RSA_WITH_AES_128_CBC_SHA256
-		0xc028, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
-		0x006b, // TLS_DHE_RSA_WITH_AES_256_CBC_SHA256
-
-		// DHE-DSS/RSA + AES-GCM
-		0x00a3, // TLS_DHE_DSS_WITH_AES_256_GCM_SHA384
-		0x009f, // TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
-
-		// ChaCha20-Poly1305
+		0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
 		0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
 		0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-		0xccaa, // TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-
-		// AES-CCM (256-bit)
-		0xc0af, // TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8
-		0xc0ad, // TLS_ECDHE_ECDSA_WITH_AES_256_CCM
-		0xc0a3, // TLS_DHE_RSA_WITH_AES_256_CCM_8
-		0xc09f, // TLS_DHE_RSA_WITH_AES_256_CCM
-
-		// ARIA (256-bit)
-		0xc05d, // TLS_ECDHE_ECDSA_WITH_ARIA_256_GCM_SHA384
-		0xc061, // TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384
-		0xc057, // TLS_DHE_DSS_WITH_ARIA_256_GCM_SHA384
-		0xc053, // TLS_DHE_RSA_WITH_ARIA_256_GCM_SHA384
-
-		// DHE-DSS + AES-GCM (128-bit)
-		0x00a2, // TLS_DHE_DSS_WITH_AES_128_GCM_SHA256
-
-		// AES-CCM (128-bit)
-		0xc0ae, // TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8
-		0xc0ac, // TLS_ECDHE_ECDSA_WITH_AES_128_CCM
-		0xc0a2, // TLS_DHE_RSA_WITH_AES_128_CCM_8
-		0xc09e, // TLS_DHE_RSA_WITH_AES_128_CCM
-
-		// ARIA (128-bit)
-		0xc05c, // TLS_ECDHE_ECDSA_WITH_ARIA_128_GCM_SHA256
-		0xc060, // TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256
-		0xc056, // TLS_DHE_DSS_WITH_ARIA_128_GCM_SHA256
-		0xc052, // TLS_DHE_RSA_WITH_ARIA_128_GCM_SHA256
-
-		// ECDHE/DHE + AES-CBC-SHA384/256 (more)
-		0xc024, // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
-		0x006a, // TLS_DHE_DSS_WITH_AES_256_CBC_SHA256
-		0xc023, // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
-		0x0040, // TLS_DHE_DSS_WITH_AES_128_CBC_SHA256
-
-		// ECDHE/DHE + AES-CBC-SHA (legacy)
-		0xc00a, // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
-		0xc014, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-		0x0039, // TLS_DHE_RSA_WITH_AES_256_CBC_SHA
-		0x0038, // TLS_DHE_DSS_WITH_AES_256_CBC_SHA
 		0xc009, // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
 		0xc013, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-		0x0033, // TLS_DHE_RSA_WITH_AES_128_CBC_SHA
-		0x0032, // TLS_DHE_DSS_WITH_AES_128_CBC_SHA
-
-		// RSA + AES-GCM/CCM/ARIA (non-PFS, 256-bit)
-		0x009d, // TLS_RSA_WITH_AES_256_GCM_SHA384
-		0xc0a1, // TLS_RSA_WITH_AES_256_CCM_8
-		0xc09d, // TLS_RSA_WITH_AES_256_CCM
-		0xc051, // TLS_RSA_WITH_ARIA_256_GCM_SHA384
-
-		// RSA + AES-GCM/CCM/ARIA (non-PFS, 128-bit)
+		0xc00a, // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+		0xc014, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
 		0x009c, // TLS_RSA_WITH_AES_128_GCM_SHA256
-		0xc0a0, // TLS_RSA_WITH_AES_128_CCM_8
-		0xc09c, // TLS_RSA_WITH_AES_128_CCM
-		0xc050, // TLS_RSA_WITH_ARIA_128_GCM_SHA256
-
-		// RSA + AES-CBC (non-PFS, legacy)
-		0x003d, // TLS_RSA_WITH_AES_256_CBC_SHA256
-		0x003c, // TLS_RSA_WITH_AES_128_CBC_SHA256
-		0x0035, // TLS_RSA_WITH_AES_256_CBC_SHA
+		0x009d, // TLS_RSA_WITH_AES_256_GCM_SHA384
 		0x002f, // TLS_RSA_WITH_AES_128_CBC_SHA
-
-		// Renegotiation indication
-		0x00ff, // TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+		0x0035, // TLS_RSA_WITH_AES_256_CBC_SHA
 	}
 
-	// defaultCurves contains the 10 supported groups from Claude CLI (including FFDHE)
+	// defaultCurves must keep the captured order exactly.
 	defaultCurves = []utls.CurveID{
-		utls.X25519,          // 0x001d
-		utls.CurveP256,       // 0x0017 (secp256r1)
-		utls.CurveID(0x001e), // x448
-		utls.CurveP521,       // 0x0019 (secp521r1)
-		utls.CurveP384,       // 0x0018 (secp384r1)
-		utls.CurveID(0x0100), // ffdhe2048
-		utls.CurveID(0x0101), // ffdhe3072
-		utls.CurveID(0x0102), // ffdhe4096
-		utls.CurveID(0x0103), // ffdhe6144
-		utls.CurveID(0x0104), // ffdhe8192
+		utls.X25519,    // 0x001d
+		utls.CurveP256, // 0x0017 (secp256r1)
+		utls.CurveP384, // 0x0018 (secp384r1)
 	}
 
-	// defaultPointFormats contains all 3 point formats from Claude CLI
+	// defaultPointFormats must keep the captured order exactly.
 	defaultPointFormats = []uint8{
 		0, // uncompressed
-		1, // ansiX962_compressed_prime
-		2, // ansiX962_compressed_char2
 	}
 
-	// defaultSignatureAlgorithms contains the 20 signature algorithms from Claude CLI
+	// defaultSignatureAlgorithms must keep the captured order exactly.
 	defaultSignatureAlgorithms = []utls.SignatureScheme{
 		0x0403, // ecdsa_secp256r1_sha256
-		0x0503, // ecdsa_secp384r1_sha384
-		0x0603, // ecdsa_secp521r1_sha512
-		0x0807, // ed25519
-		0x0808, // ed448
-		0x0809, // rsa_pss_pss_sha256
-		0x080a, // rsa_pss_pss_sha384
-		0x080b, // rsa_pss_pss_sha512
 		0x0804, // rsa_pss_rsae_sha256
-		0x0805, // rsa_pss_rsae_sha384
-		0x0806, // rsa_pss_rsae_sha512
 		0x0401, // rsa_pkcs1_sha256
+		0x0503, // ecdsa_secp384r1_sha384
+		0x0805, // rsa_pss_rsae_sha384
 		0x0501, // rsa_pkcs1_sha384
+		0x0806, // rsa_pss_rsae_sha512
 		0x0601, // rsa_pkcs1_sha512
-		0x0303, // ecdsa_sha224
-		0x0301, // rsa_pkcs1_sha224
-		0x0302, // dsa_sha224
-		0x0402, // dsa_sha256
-		0x0502, // dsa_sha384
-		0x0602, // dsa_sha512
+		0x0201, // rsa_pkcs1_sha1
 	}
 )
 
@@ -216,6 +123,23 @@ func NewHTTPProxyDialer(profile *Profile, proxyURL *url.URL) *HTTPProxyDialer {
 // It establishes a SOCKS5 tunnel before performing TLS handshake with custom fingerprint.
 func NewSOCKS5ProxyDialer(profile *Profile, proxyURL *url.URL) *SOCKS5ProxyDialer {
 	return &SOCKS5ProxyDialer{profile: profile, proxyURL: proxyURL}
+}
+
+func applyPresetWithCapturedSessionID(tlsConn *utls.UConn, spec *utls.ClientHelloSpec) error {
+	if err := tlsConn.ApplyPreset(spec); err != nil {
+		return err
+	}
+
+	// Bun sends a 32-byte session ID for this fingerprint.
+	if tlsConn.HandshakeState.Hello == nil {
+		return fmt.Errorf("utls did not expose public ClientHello after ApplyPreset")
+	}
+	sessionID := make([]byte, 32)
+	if _, err := rand.Read(sessionID); err != nil {
+		return fmt.Errorf("generate session ID: %w", err)
+	}
+	tlsConn.HandshakeState.Hello.SessionId = sessionID
+	return nil
 }
 
 // DialTLSContext establishes a TLS connection through SOCKS5 proxy with the configured fingerprint.
@@ -262,7 +186,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	}
 	slog.Debug("tls_fingerprint_socks5_starting_handshake", "host", host)
 
-	// Build ClientHello specification from profile (Node.js/Claude CLI fingerprint)
+	// Build ClientHello specification from profile (native Claude Code fingerprint)
 	spec := buildClientHelloSpecFromProfile(d.profile)
 	slog.Debug("tls_fingerprint_socks5_clienthello_spec",
 		"cipher_suites", len(spec.CipherSuites),
@@ -280,7 +204,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 		ServerName: host,
 	}, utls.HelloCustom)
 
-	if err := tlsConn.ApplyPreset(spec); err != nil {
+	if err := applyPresetWithCapturedSessionID(tlsConn, spec); err != nil {
 		slog.Debug("tls_fingerprint_socks5_apply_preset_failed", "error", err)
 		_ = conn.Close()
 		return nil, fmt.Errorf("apply TLS preset: %w", err)
@@ -390,7 +314,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		ServerName: host,
 	}, utls.HelloCustom)
 
-	if err := tlsConn.ApplyPreset(spec); err != nil {
+	if err := applyPresetWithCapturedSessionID(tlsConn, spec); err != nil {
 		slog.Debug("tls_fingerprint_http_proxy_apply_preset_failed", "error", err)
 		_ = conn.Close()
 		return nil, fmt.Errorf("apply TLS preset: %w", err)
@@ -450,7 +374,7 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 	}, utls.HelloCustom)
 
 	// Apply fingerprint
-	if err := tlsConn.ApplyPreset(spec); err != nil {
+	if err := applyPresetWithCapturedSessionID(tlsConn, spec); err != nil {
 		slog.Debug("tls_fingerprint_apply_preset_failed", "error", err)
 		_ = conn.Close()
 		return nil, err
@@ -531,26 +455,30 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 	// utls will populate the server name from Config.ServerName
 	extensions = append(extensions, &utls.SNIExtension{})
 
-	// Claude CLI extension order (captured from tshark):
-	// server_name(0), ec_point_formats(11), supported_groups(10), session_ticket(35),
-	// alpn(16), encrypt_then_mac(22), extended_master_secret(23),
-	// signature_algorithms(13), supported_versions(43),
-	// psk_key_exchange_modes(45), key_share(51)
+	// Claude Code native 2.1.80 / Bun extension order:
+	// server_name(0), ech_grease(65037), extended_master_secret(23), renegotiation_info(65281),
+	// supported_groups(10), ec_point_formats(11), session_ticket(35), alpn(16),
+	// status_request(5), signature_algorithms(13),
+	// signed_certificate_timestamp(18), key_share(51),
+	// psk_key_exchange_modes(45), supported_versions(43)
 	extensions = append(extensions,
-		&utls.SupportedPointsExtension{SupportedPoints: pointFormats},
+		utls.BoringGREASEECH(),
+		&utls.ExtendedMasterSecretExtension{},
+		&utls.RenegotiationInfoExtension{Renegotiation: utls.RenegotiateOnceAsClient},
 		&utls.SupportedCurvesExtension{Curves: curves},
+		&utls.SupportedPointsExtension{SupportedPoints: pointFormats},
 		&utls.SessionTicketExtension{},
 		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
-		&utls.GenericExtension{Id: 22},
-		&utls.ExtendedMasterSecretExtension{},
+		&utls.StatusRequestExtension{},
 		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms},
+		&utls.SCTExtension{},
+		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{
+			{Group: utls.X25519},
+		}},
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
 		&utls.SupportedVersionsExtension{Versions: []uint16{
 			utls.VersionTLS13,
 			utls.VersionTLS12,
-		}},
-		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
-		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{
-			{Group: utls.X25519},
 		}},
 	)
 

@@ -646,7 +646,7 @@ type SoraModelFiltersConfig struct {
 }
 
 // TLSFingerprintConfig TLS指纹伪装配置
-// 用于模拟 Claude CLI (Node.js) 的 TLS 握手特征，避免被识别为非官方客户端
+// 用于模拟 native Claude Code 的 TLS 握手特征，避免被识别为非官方客户端
 type TLSFingerprintConfig struct {
 	// Enabled: 是否全局启用TLS指纹功能
 	Enabled bool `mapstructure:"enabled"`
@@ -659,7 +659,7 @@ type TLSFingerprintConfig struct {
 type TLSProfileConfig struct {
 	// Name: 模板显示名称
 	Name string `mapstructure:"name"`
-	// EnableGREASE: 是否启用GREASE扩展（Chrome使用，Node.js不使用）
+	// EnableGREASE: 是否启用额外 GREASE 扩展（native Claude Code 指纹默认不启用通用 GREASE）
 	EnableGREASE bool `mapstructure:"enable_grease"`
 	// CipherSuites: TLS加密套件列表（空则使用内置默认值）
 	CipherSuites []uint16 `mapstructure:"cipher_suites"`

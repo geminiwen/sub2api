@@ -9,7 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
-// DefaultProfileName is the name of the built-in Claude CLI profile.
+// DefaultProfileName is the key for the built-in Claude Code TLS fingerprint profile.
 const DefaultProfileName = "claude_cli_v2"
 
 // Registry manages TLS fingerprint profiles.
@@ -64,11 +64,11 @@ func NewRegistryFromConfig(cfg *config.TLSFingerprintConfig) *Registry {
 	return r
 }
 
-// registerBuiltinProfile adds the default Claude CLI profile to the registry.
+// registerBuiltinProfile adds the built-in Claude Code fingerprint profile to the registry.
 func (r *Registry) registerBuiltinProfile() {
 	defaultProfile := &Profile{
-		Name:         "Claude CLI 2.x (Node.js 20.x + OpenSSL 3.x)",
-		EnableGREASE: false, // Node.js does not use GREASE
+		Name:         "Claude Code native 2.1.80 (Bun runtime)",
+		EnableGREASE: false,
 		// Empty slices will cause dialer to use built-in defaults
 		CipherSuites: nil,
 		Curves:       nil,

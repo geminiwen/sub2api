@@ -14,12 +14,16 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // TestDialerBasicConnection tests that the dialer can establish TLS connections.
@@ -53,15 +57,14 @@ func TestDialerBasicConnection(t *testing.T) {
 	}
 }
 
-// TestJA3Fingerprint verifies the JA3/JA4 fingerprint matches expected value.
+// TestJA3Fingerprint verifies the JA3 fingerprint matches the Bun-based default profile.
 // This test uses tls.peet.ws to verify the fingerprint.
-// Expected JA3 hash: 1a28e69016765d92e3b381168d68922c (Claude CLI / Node.js 20.x)
-// Expected JA4: t13d5911h1_a33745022dd6_1f22a2ca17c4 (d=domain) or t13i5911h1_... (i=IP)
+// Expected JA3 hash: 44f88fca027f27bab4bb08d4af15f23e (Claude Code native 2.1.80 / Bun)
 func TestJA3Fingerprint(t *testing.T) {
 	skipNetworkTest(t)
 
 	profile := &Profile{
-		Name:         "Claude CLI Test",
+		Name:         "Claude Code Native Test",
 		EnableGREASE: false,
 	}
 	dialer := NewDialer(profile, nil)
@@ -108,54 +111,25 @@ func TestJA3Fingerprint(t *testing.T) {
 	t.Logf("PeetPrint Hash: %s", fpResp.TLS.PeetPrintHash)
 
 	// Verify JA3 hash matches expected value
-	expectedJA3Hash := "1a28e69016765d92e3b381168d68922c"
+	expectedJA3Hash := "44f88fca027f27bab4bb08d4af15f23e"
 	if fpResp.TLS.JA3Hash == expectedJA3Hash {
 		t.Logf("✓ JA3 hash matches expected value: %s", expectedJA3Hash)
 	} else {
 		t.Errorf("✗ JA3 hash mismatch: got %s, expected %s", fpResp.TLS.JA3Hash, expectedJA3Hash)
 	}
 
-	// Verify JA4 fingerprint
-	// JA4 format: t[version][sni][cipher_count][ext_count][alpn]_[cipher_hash]_[ext_hash]
-	// Expected: t13d5910h1 (d=domain) or t13i5910h1 (i=IP)
-	// The suffix _a33745022dd6_1f22a2ca17c4 should match
-	expectedJA4Suffix := "_a33745022dd6_1f22a2ca17c4"
-	if strings.HasSuffix(fpResp.TLS.JA4, expectedJA4Suffix) {
-		t.Logf("✓ JA4 suffix matches expected value: %s", expectedJA4Suffix)
+	expectedJA3 := "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49161-49171-49162-49172-156-157-47-53,0-65037-23-65281-10-11-35-16-5-13-18-51-45-43,29-23-24,0"
+	if fpResp.TLS.JA3 == expectedJA3 {
+		t.Logf("✓ JA3 string matches expected value")
 	} else {
-		t.Errorf("✗ JA4 suffix mismatch: got %s, expected suffix %s", fpResp.TLS.JA4, expectedJA4Suffix)
+		t.Errorf("✗ JA3 string mismatch: got %s, expected %s", fpResp.TLS.JA3, expectedJA3)
 	}
 
-	// Verify JA4 prefix (t13d5911h1 or t13i5911h1)
-	// d = domain (SNI present), i = IP (no SNI)
-	// Since we connect to tls.peet.ws (domain), we expect 'd'
-	expectedJA4Prefix := "t13d5911h1"
-	if strings.HasPrefix(fpResp.TLS.JA4, expectedJA4Prefix) {
-		t.Logf("✓ JA4 prefix matches: %s (t13=TLS1.3, d=domain, 59=ciphers, 11=extensions, h1=HTTP/1.1)", expectedJA4Prefix)
-	} else {
-		// Also accept 'i' variant for IP connections
-		altPrefix := "t13i5911h1"
-		if strings.HasPrefix(fpResp.TLS.JA4, altPrefix) {
-			t.Logf("✓ JA4 prefix matches (IP variant): %s", altPrefix)
-		} else {
-			t.Errorf("✗ JA4 prefix mismatch: got %s, expected %s or %s", fpResp.TLS.JA4, expectedJA4Prefix, altPrefix)
-		}
-	}
-
-	// Verify JA3 contains expected cipher suites (TLS 1.3 ciphers at the beginning)
-	if strings.Contains(fpResp.TLS.JA3, "4866-4867-4865") {
-		t.Logf("✓ JA3 contains expected TLS 1.3 cipher suites")
-	} else {
-		t.Logf("Warning: JA3 does not contain expected TLS 1.3 cipher suites")
-	}
-
-	// Verify extension list (should be 11 extensions including SNI)
-	// Expected: 0-11-10-35-16-22-23-13-43-45-51
-	expectedExtensions := "0-11-10-35-16-22-23-13-43-45-51"
+	expectedExtensions := "0-65037-23-65281-10-11-35-16-5-13-18-51-45-43"
 	if strings.Contains(fpResp.TLS.JA3, expectedExtensions) {
 		t.Logf("✓ JA3 contains expected extension list: %s", expectedExtensions)
 	} else {
-		t.Logf("Warning: JA3 extension list may differ")
+		t.Errorf("✗ JA3 extension list mismatch: got %s", fpResp.TLS.JA3)
 	}
 }
 
@@ -258,6 +232,10 @@ func TestBuildClientHelloSpec(t *testing.T) {
 		t.Errorf("expected %d cipher suites, got %d", len(defaultCipherSuites), len(spec.CipherSuites))
 	}
 
+	if len(spec.CompressionMethods) != 1 || spec.CompressionMethods[0] != 0 {
+		t.Fatalf("expected null compression only, got %v", spec.CompressionMethods)
+	}
+
 	// Test with custom profile
 	customProfile := &Profile{
 		Name:         "Custom",
@@ -268,6 +246,153 @@ func TestBuildClientHelloSpec(t *testing.T) {
 
 	if len(spec.CipherSuites) != 2 {
 		t.Errorf("expected 2 cipher suites, got %d", len(spec.CipherSuites))
+	}
+}
+
+func TestApplyPresetWithCapturedSessionID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	defer func() { _ = serverConn.Close() }()
+
+	tlsConn := utls.UClient(clientConn, &utls.Config{ServerName: "example.com"}, utls.HelloCustom)
+	spec := buildClientHelloSpecFromProfile(nil)
+
+	if err := applyPresetWithCapturedSessionID(tlsConn, spec); err != nil {
+		t.Fatalf("apply preset failed: %v", err)
+	}
+	if tlsConn.HandshakeState.Hello == nil {
+		t.Fatal("expected public ClientHello to be populated")
+	}
+	if got := len(tlsConn.HandshakeState.Hello.SessionId); got != 32 {
+		t.Fatalf("session ID length = %d, want 32", got)
+	}
+}
+
+func TestBuildClientHelloSpec_DefaultShapeMatchesCapturedFingerprint(t *testing.T) {
+	spec := buildClientHelloSpecFromProfile(nil)
+
+	expectedCipherSuites := []uint16{
+		0x1301, 0x1302, 0x1303,
+		0xc02b, 0xc02f, 0xc02c, 0xc030,
+		0xcca9, 0xcca8,
+		0xc009, 0xc013, 0xc00a, 0xc014,
+		0x009c, 0x009d, 0x002f, 0x0035,
+	}
+	if !reflect.DeepEqual(spec.CipherSuites, expectedCipherSuites) {
+		t.Fatalf("cipher suites mismatch: got %v, want %v", spec.CipherSuites, expectedCipherSuites)
+	}
+
+	expectedCurves := []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384}
+	curvesExt, ok := spec.Extensions[4].(*utls.SupportedCurvesExtension)
+	if !ok {
+		t.Fatalf("extension 4 = %T, want *utls.SupportedCurvesExtension", spec.Extensions[4])
+	}
+	if !reflect.DeepEqual(curvesExt.Curves, expectedCurves) {
+		t.Fatalf("supported curves mismatch: got %v, want %v", curvesExt.Curves, expectedCurves)
+	}
+
+	pointsExt, ok := spec.Extensions[5].(*utls.SupportedPointsExtension)
+	if !ok {
+		t.Fatalf("extension 5 = %T, want *utls.SupportedPointsExtension", spec.Extensions[5])
+	}
+	if !reflect.DeepEqual(pointsExt.SupportedPoints, []uint8{0}) {
+		t.Fatalf("point formats mismatch: got %v, want [0]", pointsExt.SupportedPoints)
+	}
+
+	sigExt, ok := spec.Extensions[9].(*utls.SignatureAlgorithmsExtension)
+	if !ok {
+		t.Fatalf("extension 9 = %T, want *utls.SignatureAlgorithmsExtension", spec.Extensions[9])
+	}
+	expectedSigAlgs := []utls.SignatureScheme{
+		0x0403, 0x0804, 0x0401,
+		0x0503, 0x0805, 0x0501,
+		0x0806, 0x0601, 0x0201,
+	}
+	if !reflect.DeepEqual(sigExt.SupportedSignatureAlgorithms, expectedSigAlgs) {
+		t.Fatalf("signature algorithms mismatch: got %v, want %v", sigExt.SupportedSignatureAlgorithms, expectedSigAlgs)
+	}
+}
+
+func TestBuildClientHelloSpec_DefaultExtensionOrderMatchesCapturedFingerprint(t *testing.T) {
+	spec := buildClientHelloSpecFromProfile(nil)
+
+	got := make([]string, 0, len(spec.Extensions))
+	for _, ext := range spec.Extensions {
+		switch e := ext.(type) {
+		case *utls.SNIExtension:
+			got = append(got, "server_name")
+		case *utls.GREASEEncryptedClientHelloExtension:
+			got = append(got, "ech_grease")
+			buf := make([]byte, e.Len())
+			n, err := e.Read(buf)
+			if err != io.EOF {
+				t.Fatalf("ECH GREASE read error: %v", err)
+			}
+			if n != len(buf) {
+				t.Fatalf("ECH GREASE length mismatch: got %d, want %d", n, len(buf))
+			}
+			if buf[0] != 0xfe || buf[1] != 0x0d {
+				t.Fatalf("ECH GREASE extension id bytes = %02x%02x, want fe0d", buf[0], buf[1])
+			}
+		case *utls.ExtendedMasterSecretExtension:
+			got = append(got, "extended_master_secret")
+		case *utls.RenegotiationInfoExtension:
+			got = append(got, "renegotiation_info")
+		case *utls.SupportedCurvesExtension:
+			got = append(got, "supported_groups")
+		case *utls.SupportedPointsExtension:
+			got = append(got, "ec_point_formats")
+		case *utls.SessionTicketExtension:
+			got = append(got, "session_ticket")
+		case *utls.ALPNExtension:
+			got = append(got, "alpn")
+			if !reflect.DeepEqual(e.AlpnProtocols, []string{"http/1.1"}) {
+				t.Fatalf("ALPN mismatch: got %v, want [http/1.1]", e.AlpnProtocols)
+			}
+		case *utls.StatusRequestExtension:
+			got = append(got, "status_request")
+		case *utls.SignatureAlgorithmsExtension:
+			got = append(got, "signature_algorithms")
+		case *utls.SCTExtension:
+			got = append(got, "signed_certificate_timestamp")
+		case *utls.KeyShareExtension:
+			got = append(got, "key_share")
+			if len(e.KeyShares) != 1 || e.KeyShares[0].Group != utls.X25519 {
+				t.Fatalf("key shares mismatch: got %+v", e.KeyShares)
+			}
+		case *utls.PSKKeyExchangeModesExtension:
+			got = append(got, "psk_key_exchange_modes")
+			if !reflect.DeepEqual(e.Modes, []uint8{utls.PskModeDHE}) {
+				t.Fatalf("psk modes mismatch: got %v, want [%d]", e.Modes, utls.PskModeDHE)
+			}
+		case *utls.SupportedVersionsExtension:
+			got = append(got, "supported_versions")
+			if !reflect.DeepEqual(e.Versions, []uint16{utls.VersionTLS13, utls.VersionTLS12}) {
+				t.Fatalf("supported versions mismatch: got %v", e.Versions)
+			}
+		default:
+			t.Fatalf("unexpected extension type %T", ext)
+		}
+	}
+
+	expected := []string{
+		"server_name",
+		"ech_grease",
+		"extended_master_secret",
+		"renegotiation_info",
+		"supported_groups",
+		"ec_point_formats",
+		"session_ticket",
+		"alpn",
+		"status_request",
+		"signature_algorithms",
+		"signed_certificate_timestamp",
+		"key_share",
+		"psk_key_exchange_modes",
+		"supported_versions",
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("extension order mismatch: got %v, want %v", got, expected)
 	}
 }
 
@@ -313,30 +438,15 @@ func TestAllProfiles(t *testing.T) {
 	// These profiles are from config.yaml gateway.tls_fingerprint.profiles
 	profiles := []TestProfileExpectation{
 		{
-			// Linux x64 Node.js v22.17.1
-			// Expected JA3 Hash: 1a28e69016765d92e3b381168d68922c
-			// Expected JA4: t13d5911h1_a33745022dd6_1f22a2ca17c4
+			// Claude Code native 2.1.80 / Bun
 			Profile: &Profile{
-				Name:         "linux_x64_node_v22171",
+				Name:         "claude_code_bun_2180",
 				EnableGREASE: false,
-				CipherSuites: []uint16{4866, 4867, 4865, 49199, 49195, 49200, 49196, 158, 49191, 103, 49192, 107, 163, 159, 52393, 52392, 52394, 49327, 49325, 49315, 49311, 49245, 49249, 49239, 49235, 162, 49326, 49324, 49314, 49310, 49244, 49248, 49238, 49234, 49188, 106, 49187, 64, 49162, 49172, 57, 56, 49161, 49171, 51, 50, 157, 49313, 49309, 49233, 156, 49312, 49308, 49232, 61, 60, 53, 47, 255},
-				Curves:       []uint16{29, 23, 30, 25, 24, 256, 257, 258, 259, 260},
-				PointFormats: []uint8{0, 1, 2},
+				CipherSuites: []uint16{4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49161, 49171, 49162, 49172, 156, 157, 47, 53},
+				Curves:       []uint16{29, 23, 24},
+				PointFormats: []uint8{0},
 			},
-			JA4CipherHash: "a33745022dd6", // stable part
-		},
-		{
-			// MacOS arm64 Node.js v22.18.0
-			// Expected JA3 Hash: 70cb5ca646080902703ffda87036a5ea
-			// Expected JA4: t13d5912h1_a33745022dd6_dbd39dd1d406
-			Profile: &Profile{
-				Name:         "macos_arm64_node_v22180",
-				EnableGREASE: false,
-				CipherSuites: []uint16{4866, 4867, 4865, 49199, 49195, 49200, 49196, 158, 49191, 103, 49192, 107, 163, 159, 52393, 52392, 52394, 49327, 49325, 49315, 49311, 49245, 49249, 49239, 49235, 162, 49326, 49324, 49314, 49310, 49244, 49248, 49238, 49234, 49188, 106, 49187, 64, 49162, 49172, 57, 56, 49161, 49171, 51, 50, 157, 49313, 49309, 49233, 156, 49312, 49308, 49232, 61, 60, 53, 47, 255},
-				Curves:       []uint16{29, 23, 30, 25, 24, 256, 257, 258, 259, 260},
-				PointFormats: []uint8{0, 1, 2},
-			},
-			JA4CipherHash: "a33745022dd6", // stable part (same cipher suites)
+			ExpectedJA3: "44f88fca027f27bab4bb08d4af15f23e",
 		},
 	}
 

@@ -105,15 +105,15 @@ func TestGetProfileByAccountID(t *testing.T) {
 		accountID    int64
 		expectedName string
 	}{
-		{0, "Claude CLI 2.x (Node.js 20.x + OpenSSL 3.x)"},
+		{0, "Claude Code native 2.1.80 (Bun runtime)"},
 		{1, "Profile A"},
 		{2, "Profile B"},
-		{3, "Claude CLI 2.x (Node.js 20.x + OpenSSL 3.x)"},
+		{3, "Claude Code native 2.1.80 (Bun runtime)"},
 		{4, "Profile A"},
 		{5, "Profile B"},
 		{100, "Profile A"}, // 100 % 3 = 1
 		{-1, "Profile A"},  // |-1| % 3 = 1
-		{-3, "Claude CLI 2.x (Node.js 20.x + OpenSSL 3.x)"}, // |-3| % 3 = 0
+		{-3, "Claude Code native 2.1.80 (Bun runtime)"}, // |-3| % 3 = 0
 	}
 
 	for _, tc := range testCases {

@@ -2291,7 +2291,7 @@ export default {
         },
         tlsFingerprint: {
           label: 'TLS Fingerprint Simulation',
-          hint: 'Simulate Node.js/Claude Code client TLS fingerprint'
+          hint: 'Simulate native Claude Code client TLS fingerprint'
         },
         sessionIdMasking: {
           label: 'Session ID Masking',

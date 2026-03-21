@@ -40,7 +40,7 @@ func skipIfExternalServiceUnavailable(t *testing.T, err error) {
 
 // TestJA3Fingerprint verifies the JA3/JA4 fingerprint matches expected value.
 // This test uses tls.peet.ws to verify the fingerprint.
-// Expected JA3 hash: 1a28e69016765d92e3b381168d68922c (Claude CLI / Node.js 20.x)
+// Expected JA3 hash for the legacy native Claude Code profile.
 // Expected JA4: t13d5911h1_a33745022dd6_1f22a2ca17c4 (d=domain) or t13i5911h1_... (i=IP)
 func TestJA3Fingerprint(t *testing.T) {
 	// Skip if network is unavailable or if running in short mode
@@ -49,7 +49,7 @@ func TestJA3Fingerprint(t *testing.T) {
 	}
 
 	profile := &Profile{
-		Name:         "Claude CLI Test",
+		Name:         "Claude Code Native Test",
 		EnableGREASE: false,
 	}
 	dialer := NewDialer(profile, nil)
@@ -164,7 +164,7 @@ func TestAllProfiles(t *testing.T) {
 	// These profiles are from config.yaml gateway.tls_fingerprint.profiles
 	profiles := []TestProfileExpectation{
 		{
-			// Linux x64 Node.js v22.17.1
+			// Legacy native Claude Code profile
 			// Expected JA3 Hash: 1a28e69016765d92e3b381168d68922c
 			// Expected JA4: t13d5911h1_a33745022dd6_1f22a2ca17c4
 			Profile: &Profile{
@@ -177,7 +177,7 @@ func TestAllProfiles(t *testing.T) {
 			JA4CipherHash: "a33745022dd6", // stable part
 		},
 		{
-			// MacOS arm64 Node.js v22.18.0
+			// Alternate legacy native Claude Code profile
 			// Expected JA3 Hash: 70cb5ca646080902703ffda87036a5ea
 			// Expected JA4: t13d5912h1_a33745022dd6_dbd39dd1d406
 			Profile: &Profile{
