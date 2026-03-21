@@ -116,6 +116,7 @@ func TestBuildCountTokensRequest_HaikuAddsCountTokenBetas(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
+	require.Equal(t, "keep-alive", req.Header.Get("Connection"))
 	require.Equal(
 		t,
 		"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,token-counting-2024-11-01",

@@ -189,6 +189,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, upstream.lastReq.Header.Get("authorization"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-goog-api-key"))
 	require.Empty(t, upstream.lastReq.Header.Get("cookie"))
+	require.Equal(t, "keep-alive", upstream.lastReq.Header.Get("Connection"))
 	require.Equal(t, "2023-06-01", testHeaderValue(upstream.lastReq.Header, "anthropic-version"))
 	require.Equal(t, "interleaved-thinking-2025-05-14", testHeaderValue(upstream.lastReq.Header, "anthropic-beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-stainless-lang"), "API Key 透传不应注入 OAuth 指纹头")
@@ -270,6 +271,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBo
 	require.Equal(t, "upstream-anthropic-key", upstream.lastReq.Header.Get("x-api-key"))
 	require.Empty(t, upstream.lastReq.Header.Get("authorization"))
 	require.Empty(t, upstream.lastReq.Header.Get("cookie"))
+	require.Equal(t, "keep-alive", upstream.lastReq.Header.Get("Connection"))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, upstreamRespBody, rec.Body.String())
 	require.Empty(t, rec.Header().Get("Set-Cookie"))
@@ -695,11 +697,12 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	req, err := svc.buildUpstreamRequest(context.Background(), c, account, []byte(`{"model":"claude-3-7-sonnet-20250219"}`), "oauth-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer oauth-token", req.Header.Get("authorization"))
-	require.Contains(t, strings.Join(req.Header["anthropic-beta"], ","), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
+	require.Equal(t, "keep-alive", req.Header.Get("Connection"))
+	require.Contains(t, testHeaderValue(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
 	require.Equal(t, "gzip, deflate, br, zstd", req.Header.Get("accept-encoding"))
 }
 
-func TestGatewayService_BuildUpstreamRequest_PlacesStreamAfterSystemForAnthropic(t *testing.T) {
+func TestGatewayService_BuildUpstreamRequest_PreservesClientBodyOrderForAnthropic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -722,11 +725,17 @@ func TestGatewayService_BuildUpstreamRequest_PlacesStreamAfterSystemForAnthropic
 	builtBody, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 
+	modelIndex := bytes.Index(builtBody, []byte(`"model":"claude-sonnet-4-5"`))
 	streamIndex := bytes.Index(builtBody, []byte(`"stream":true`))
+	messagesIndex := bytes.Index(builtBody, []byte(`"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]`))
 	systemIndex := bytes.Index(builtBody, []byte(`"system":[{"type":"text","text":"sys"}]`))
+	require.NotEqual(t, -1, modelIndex)
 	require.NotEqual(t, -1, streamIndex)
+	require.NotEqual(t, -1, messagesIndex)
 	require.NotEqual(t, -1, systemIndex)
-	require.Greater(t, streamIndex, systemIndex)
+	require.Greater(t, streamIndex, modelIndex)
+	require.Greater(t, messagesIndex, streamIndex)
+	require.Greater(t, systemIndex, messagesIndex)
 }
 
 func TestGatewayService_BuildUpstreamRequest_ComputesCCHAfterFinalBodyOrdering(t *testing.T) {

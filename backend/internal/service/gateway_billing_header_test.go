@@ -215,6 +215,34 @@ func TestApplyAnthropicBillingCCH_SkipsWhenBillingHeaderMissing(t *testing.T) {
 	require.Equal(t, string(body), string(updated))
 }
 
+func TestNormalizeClaudeHeaderCaseForWire_RewritesSelectedHeaders(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	require.NoError(t, err)
+
+	req.Header.Set("Anthropic-Beta", "beta")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	req.Header.Set("X-App", "cli")
+	req.Header.Set("X-Stainless-OS", "MacOS")
+
+	normalizeClaudeHeaderCaseForWire(req.Header)
+
+	var buf bytes.Buffer
+	require.NoError(t, req.Write(&buf))
+	wire := buf.String()
+
+	require.Contains(t, wire, "anthropic-beta: beta\r\n")
+	require.Contains(t, wire, "anthropic-version: 2023-06-01\r\n")
+	require.Contains(t, wire, "anthropic-dangerous-direct-browser-access: true\r\n")
+	require.Contains(t, wire, "x-app: cli\r\n")
+	require.Contains(t, wire, "X-Stainless-OS: MacOS\r\n")
+	require.NotContains(t, wire, "Anthropic-Beta:")
+	require.NotContains(t, wire, "Anthropic-Version:")
+	require.NotContains(t, wire, "Anthropic-Dangerous-Direct-Browser-Access:")
+	require.NotContains(t, wire, "X-App:")
+	require.NotContains(t, wire, "X-Stainless-Os:")
+}
+
 func TestBuildAnthropicBillingHeader_PreservesClientEntrypoint(t *testing.T) {
 	body := []byte(`{
 		"messages": [
@@ -252,73 +280,4 @@ func TestResolveClaudeCLIEntrypoint_FromUserAgent(t *testing.T) {
 			require.Equal(t, tc.want, resolveClaudeCLIEntrypoint(tc.ua))
 		})
 	}
-}
-
-func TestExactCaseWhitelistedHeaderKeys_RewritesWhitelistOnly(t *testing.T) {
-	headers := http.Header{}
-	headers.Set("Anthropic-Beta", "beta")
-	headers.Set("Anthropic-Version", "2023-06-01")
-	headers.Set("X-App", "cli")
-	headers.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	headers.Set("X-Stainless-OS", "MacOS")
-	headers.Set("X-Stainless-Timeout", "600")
-	headers.Set("Content-Type", "application/json")
-
-	exactCaseWhitelistedHeaderKeys(headers, outgoingExactCaseHeaderWhitelist)
-
-	require.Equal(t, []string{"beta"}, headers["anthropic-beta"])
-	require.Equal(t, []string{"2023-06-01"}, headers["anthropic-version"])
-	require.Equal(t, []string{"cli"}, headers["x-app"])
-	require.Equal(t, []string{"true"}, headers["anthropic-dangerous-direct-browser-access"])
-	require.Equal(t, []string{"MacOS"}, headers["X-Stainless-OS"])
-	require.Equal(t, []string{"600"}, headers["X-Stainless-Timeout"])
-	require.Equal(t, []string{"application/json"}, headers["Content-Type"])
-
-	_, hasCanonicalBeta := headers["Anthropic-Beta"]
-	require.False(t, hasCanonicalBeta)
-	_, hasCanonicalVersion := headers["Anthropic-Version"]
-	require.False(t, hasCanonicalVersion)
-	_, hasCanonicalApp := headers["X-App"]
-	require.False(t, hasCanonicalApp)
-	_, hasCanonicalOS := headers["X-Stainless-Os"]
-	require.False(t, hasCanonicalOS)
-}
-
-func TestExactCaseWhitelistedHeaderKeys_WritesExpectedCaseOnHTTP11(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
-	require.NoError(t, err)
-
-	req.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	req.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	req.Header.Set("Anthropic-Version", "2023-06-01")
-	req.Header.Set("X-App", "cli")
-	req.Header.Set("X-Stainless-OS", "MacOS")
-	req.Header.Set("X-Stainless-Lang", "js")
-	req.Header.Set("X-Stainless-Timeout", "600")
-
-	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
-
-	var buf bytes.Buffer
-	require.NoError(t, req.Write(&buf))
-
-	wire := buf.String()
-	require.Contains(t, wire, "X-Stainless-Lang: js\r\n")
-	require.Contains(t, wire, "X-Stainless-OS: MacOS\r\n")
-	require.Contains(t, wire, "X-Stainless-Timeout: 600\r\n")
-	require.Contains(t, wire, "anthropic-beta: claude-code-20250219\r\n")
-	require.Contains(t, wire, "anthropic-dangerous-direct-browser-access: true\r\n")
-	require.Contains(t, wire, "anthropic-version: 2023-06-01\r\n")
-	require.Contains(t, wire, "x-app: cli\r\n")
-}
-
-func TestMoveTopLevelJSONFieldAfter_ReordersStreamBehindSystem(t *testing.T) {
-	body := []byte(`{"model":"claude-sonnet-4-5","stream":true,"messages":[],"system":[{"type":"text","text":"sys"}],"tools":[]}`)
-
-	updated := moveTopLevelJSONFieldAfter(body, "stream", "system")
-
-	streamIndex := bytes.Index(updated, []byte(`"stream":true`))
-	systemIndex := bytes.Index(updated, []byte(`"system":[{"type":"text","text":"sys"}]`))
-	require.NotEqual(t, -1, streamIndex)
-	require.NotEqual(t, -1, systemIndex)
-	require.Greater(t, streamIndex, systemIndex)
 }

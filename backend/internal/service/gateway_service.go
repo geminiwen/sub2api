@@ -90,29 +90,6 @@ var (
 	anthropicBillingHeaderCCHRe = regexp.MustCompile(`(x-anthropic-billing-header:[^"]*?\bcch=)[^;"]*(;)`)
 )
 
-var outgoingLowercaseHeaderWhitelist = []string{
-	"anthropic-beta",
-	"anthropic-dangerous-direct-browser-access",
-	"anthropic-version",
-	"x-app",
-}
-
-var outgoingExactCaseHeaderWhitelist = map[string]string{
-	"anthropic-beta": "anthropic-beta",
-	"anthropic-dangerous-direct-browser-access": "anthropic-dangerous-direct-browser-access",
-	"anthropic-version":                         "anthropic-version",
-	"x-app":                                     "x-app",
-	"x-stainless-arch":                          "X-Stainless-Arch",
-	"x-stainless-helper-method":                 "X-Stainless-Helper-Method",
-	"x-stainless-lang":                          "X-Stainless-Lang",
-	"x-stainless-os":                            "X-Stainless-OS",
-	"x-stainless-package-version":               "X-Stainless-Package-Version",
-	"x-stainless-retry-count":                   "X-Stainless-Retry-Count",
-	"x-stainless-runtime":                       "X-Stainless-Runtime",
-	"x-stainless-runtime-version":               "X-Stainless-Runtime-Version",
-	"x-stainless-timeout":                       "X-Stainless-Timeout",
-}
-
 func GatewayWindowCostPrefetchStats() (cacheHit, cacheMiss, batchSQL, fallback, errCount int64) {
 	return windowCostPrefetchCacheHitTotal.Load(),
 		windowCostPrefetchCacheMissTotal.Load(),
@@ -131,6 +108,50 @@ func GatewayUserGroupRateCacheStats() (cacheHit, cacheMiss, load, singleflightSh
 
 func GatewayModelsListCacheStats() (cacheHit, cacheMiss, store int64) {
 	return modelsListCacheHitTotal.Load(), modelsListCacheMissTotal.Load(), modelsListCacheStoreTotal.Load()
+}
+
+func rewriteHeaderCaseForWire(h http.Header, matchKey, targetKey string) {
+	if h == nil || matchKey == "" || targetKey == "" {
+		return
+	}
+
+	var values []string
+	for key, existingValues := range h {
+		if !strings.EqualFold(key, matchKey) {
+			continue
+		}
+		values = append(values, existingValues...)
+		delete(h, key)
+	}
+	if len(values) == 0 {
+		return
+	}
+
+	cloned := append([]string(nil), values...)
+	h[targetKey] = cloned
+}
+
+func normalizeClaudeHeaderCaseForWire(h http.Header) {
+	if h == nil {
+		return
+	}
+
+	rewriteAnthropic := make(map[string]struct{}, len(h))
+	for key := range h {
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		switch {
+		case strings.HasPrefix(lowerKey, "anthropic-"):
+			rewriteAnthropic[lowerKey] = struct{}{}
+		case lowerKey == "x-app":
+			rewriteHeaderCaseForWire(h, lowerKey, "x-app")
+		case lowerKey == "x-stainless-os":
+			rewriteHeaderCaseForWire(h, lowerKey, "X-Stainless-OS")
+		}
+	}
+
+	for key := range rewriteAnthropic {
+		rewriteHeaderCaseForWire(h, key, key)
+	}
 }
 
 func openAIStreamEventIsTerminal(data string) bool {
@@ -329,59 +350,6 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		sysPreview,
 		strings.Join(h, " "),
 	)
-}
-
-func lowercaseWhitelistedHeaderKeys(h http.Header, whitelist []string) {
-	if h == nil || len(whitelist) == 0 {
-		return
-	}
-
-	for _, target := range whitelist {
-		target = strings.TrimSpace(strings.ToLower(target))
-		if target == "" {
-			continue
-		}
-
-		var values []string
-		for key, existingValues := range h {
-			if !strings.EqualFold(key, target) {
-				continue
-			}
-			if values == nil {
-				values = append(values, existingValues...)
-			}
-			delete(h, key)
-		}
-		if len(values) > 0 {
-			h[target] = values
-		}
-	}
-}
-
-func exactCaseWhitelistedHeaderKeys(h http.Header, whitelist map[string]string) {
-	if h == nil || len(whitelist) == 0 {
-		return
-	}
-
-	for source, target := range whitelist {
-		source = strings.TrimSpace(strings.ToLower(source))
-		target = strings.TrimSpace(target)
-		if source == "" || target == "" {
-			continue
-		}
-
-		var values []string
-		for key, existingValues := range h {
-			if !strings.EqualFold(key, source) {
-				continue
-			}
-			values = append(values, existingValues...)
-			delete(h, key)
-		}
-		if len(values) > 0 {
-			h[target] = values
-		}
-	}
 }
 
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
@@ -948,14 +916,13 @@ func (s *GatewayService) replaceModelInBody(body []byte, newModel string) []byte
 	if len(body) == 0 {
 		return body
 	}
-	if current := gjson.GetBytes(body, "model"); current.Exists() && current.String() == newModel {
+	if current := getTopLevelJSONField(body, "model"); current.Exists() && current.String() == newModel {
 		return body
 	}
-	newBody, err := sjson.SetBytes(body, "model", newModel)
-	if err != nil {
-		return body
+	if newBody, ok := setTopLevelJSONValueBytes(body, "model", newModel); ok {
+		return newBody
 	}
-	return newBody
+	return body
 }
 
 type claudeOAuthNormalizeOptions struct {
@@ -1044,8 +1011,59 @@ func deleteJSONPathBytes(body []byte, path string) ([]byte, bool) {
 	return next, true
 }
 
+func resolveTopLevelJSONKey(body []byte, target string) (string, bool) {
+	if len(body) == 0 || strings.TrimSpace(target) == "" {
+		return "", false
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return "", false
+	}
+	var actual string
+	root.ForEach(func(key, _ gjson.Result) bool {
+		if strings.EqualFold(key.String(), target) {
+			actual = key.String()
+			return false
+		}
+		return true
+	})
+	return actual, actual != ""
+}
+
+func getTopLevelJSONField(body []byte, target string) gjson.Result {
+	if actual, ok := resolveTopLevelJSONKey(body, target); ok {
+		return gjson.GetBytes(body, actual)
+	}
+	return gjson.Result{}
+}
+
+func setTopLevelJSONValueBytes(body []byte, target string, value any) ([]byte, bool) {
+	if actual, ok := resolveTopLevelJSONKey(body, target); ok {
+		return setJSONValueBytes(body, actual, value)
+	}
+	return setJSONValueBytes(body, target, value)
+}
+
+func setTopLevelJSONRawBytes(body []byte, target string, raw []byte) ([]byte, bool) {
+	if actual, ok := resolveTopLevelJSONKey(body, target); ok {
+		return setJSONRawBytes(body, actual, raw)
+	}
+	return setJSONRawBytes(body, target, raw)
+}
+
+func deleteTopLevelJSONFieldBytes(body []byte, target string) ([]byte, bool) {
+	if actual, ok := resolveTopLevelJSONKey(body, target); ok {
+		return deleteJSONPathBytes(body, actual)
+	}
+	return body, false
+}
+
 func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOptions) ([]byte, bool) {
-	sys := gjson.GetBytes(body, "system")
+	systemKey, ok := resolveTopLevelJSONKey(body, "system")
+	if !ok {
+		return body, false
+	}
+	sys := gjson.GetBytes(body, systemKey)
 	if !sys.Exists() {
 		return body, false
 	}
@@ -1057,7 +1075,7 @@ func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOption
 	case sys.Type == gjson.String:
 		sanitized := sanitizeSystemText(sys.String())
 		if sanitized != sys.String() {
-			if next, ok := setJSONValueBytes(out, "system", sanitized); ok {
+			if next, ok := setJSONValueBytes(out, systemKey, sanitized); ok {
 				out = next
 				modified = true
 			}
@@ -1071,7 +1089,7 @@ func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOption
 					text := textResult.String()
 					sanitized := sanitizeSystemText(text)
 					if sanitized != text {
-						if next, ok := setJSONValueBytes(out, fmt.Sprintf("system.%d.text", index), sanitized); ok {
+						if next, ok := setJSONValueBytes(out, fmt.Sprintf("%s.%d.text", systemKey, index), sanitized); ok {
 							out = next
 							modified = true
 						}
@@ -1080,7 +1098,7 @@ func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOption
 			}
 
 			if opts.stripSystemCacheControl && item.Get("cache_control").Exists() {
-				if next, ok := deleteJSONPathBytes(out, fmt.Sprintf("system.%d.cache_control", index)); ok {
+				if next, ok := deleteJSONPathBytes(out, fmt.Sprintf("%s.%d.cache_control", systemKey, index)); ok {
 					out = next
 					modified = true
 				}
@@ -1099,13 +1117,13 @@ func ensureClaudeOAuthMetadataUserID(body []byte, userID string) ([]byte, bool) 
 		return body, false
 	}
 
-	metadata := gjson.GetBytes(body, "metadata")
+	metadata := getTopLevelJSONField(body, "metadata")
 	if !metadata.Exists() || metadata.Type == gjson.Null {
 		raw, err := marshalAnthropicMetadata(userID)
 		if err != nil {
 			return body, false
 		}
-		return setJSONRawBytes(body, "metadata", raw)
+		return setTopLevelJSONRawBytes(body, "metadata", raw)
 	}
 
 	trimmedRaw := strings.TrimSpace(metadata.Raw)
@@ -1114,14 +1132,18 @@ func ensureClaudeOAuthMetadataUserID(body []byte, userID string) ([]byte, bool) 
 		if existing.Exists() && existing.Type == gjson.String && existing.String() != "" {
 			return body, false
 		}
-		return setJSONValueBytes(body, "metadata.user_id", userID)
+		metadataKey, ok := resolveTopLevelJSONKey(body, "metadata")
+		if !ok {
+			return body, false
+		}
+		return setJSONValueBytes(body, metadataKey+".user_id", userID)
 	}
 
 	raw, err := marshalAnthropicMetadata(userID)
 	if err != nil {
 		return body, false
 	}
-	return setJSONRawBytes(body, "metadata", raw)
+	return setTopLevelJSONRawBytes(body, "metadata", raw)
 }
 
 func moveTopLevelJSONFieldAfter(body []byte, field string, anchor string) []byte {
@@ -1215,6 +1237,119 @@ func moveTopLevelJSONFieldAfter(body []byte, field string, anchor string) []byte
 	return out.Bytes()
 }
 
+// claudeRequestFieldOrder mirrors the static field order produced by the JS SDK body builder:
+// r() returns an object literal with fields in this exact sequence, and the call site does
+// {...B_, stream: true}, so stream is always appended last via JS spread semantics.
+// JSON.stringify() preserves insertion order, making the serialized byte sequence deterministic.
+var claudeRequestFieldOrder = []string{
+	"model", "messages", "system", "tools", "betas", "metadata",
+	"max_tokens", "thinking", "temperature", "context_management",
+	"output_config", "speed", "stream",
+}
+
+// reorderClaudeRequestBody reorders the top-level fields of a Claude API request body to match
+// the canonical field order of the JS SDK. Unknown fields are preserved in their original
+// relative order, inserted after all known fields except stream. stream is always last.
+func reorderClaudeRequestBody(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil {
+		return body
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return body
+	}
+
+	order := make([]string, 0, 16)
+	fields := make(map[string]json.RawMessage, 16)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return body
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return body
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return body
+		}
+		if _, exists := fields[key]; !exists {
+			order = append(order, key)
+		}
+		fields[key] = raw
+	}
+
+	tok, err = dec.Token()
+	if err != nil {
+		return body
+	}
+	delim, ok = tok.(json.Delim)
+	if !ok || delim != '}' {
+		return body
+	}
+
+	known := make(map[string]bool, len(claudeRequestFieldOrder))
+	for _, f := range claudeRequestFieldOrder {
+		known[f] = true
+	}
+
+	reordered := make([]string, 0, len(order))
+	for _, f := range claudeRequestFieldOrder {
+		if f == "stream" {
+			continue
+		}
+		if _, exists := fields[f]; exists {
+			reordered = append(reordered, f)
+		}
+	}
+	for _, f := range order {
+		if !known[f] {
+			reordered = append(reordered, f)
+		}
+	}
+	if _, exists := fields["stream"]; exists {
+		reordered = append(reordered, "stream")
+	}
+
+	same := len(reordered) == len(order)
+	if same {
+		for i, f := range reordered {
+			if f != order[i] {
+				same = false
+				break
+			}
+		}
+	}
+	if same {
+		return body
+	}
+
+	var out bytes.Buffer
+	out.Grow(len(body) + 8)
+	out.WriteByte('{')
+	for i, key := range reordered {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return body
+		}
+		out.Write(keyJSON)
+		out.WriteByte(':')
+		out.Write(fields[key])
+	}
+	out.WriteByte('}')
+	return out.Bytes()
+}
+
 func moveAnthropicCacheControlAfterText(body []byte) []byte {
 	if len(body) == 0 {
 		return body
@@ -1223,7 +1358,11 @@ func moveAnthropicCacheControlAfterText(body []byte) []byte {
 	out := body
 	modified := false
 
-	system := gjson.GetBytes(out, "system")
+	systemKey, hasSystem := resolveTopLevelJSONKey(out, "system")
+	system := gjson.Result{}
+	if hasSystem {
+		system = gjson.GetBytes(out, systemKey)
+	}
 	if system.IsArray() {
 		system.ForEach(func(key, item gjson.Result) bool {
 			index := int(key.Int())
@@ -1234,7 +1373,7 @@ func moveAnthropicCacheControlAfterText(body []byte) []byte {
 			if bytes.Equal(updated, []byte(item.Raw)) {
 				return true
 			}
-			if next, ok := setJSONRawBytes(out, fmt.Sprintf("system.%d", index), updated); ok {
+			if next, ok := setJSONRawBytes(out, fmt.Sprintf("%s.%d", systemKey, index), updated); ok {
 				out = next
 				modified = true
 			}
@@ -1242,7 +1381,11 @@ func moveAnthropicCacheControlAfterText(body []byte) []byte {
 		})
 	}
 
-	messages := gjson.GetBytes(out, "messages")
+	messagesKey, hasMessages := resolveTopLevelJSONKey(out, "messages")
+	messages := gjson.Result{}
+	if hasMessages {
+		messages = gjson.GetBytes(out, messagesKey)
+	}
 	if messages.IsArray() {
 		messages.ForEach(func(msgKey, msg gjson.Result) bool {
 			msgIndex := int(msgKey.Int())
@@ -1259,7 +1402,7 @@ func moveAnthropicCacheControlAfterText(body []byte) []byte {
 				if bytes.Equal(updated, []byte(item.Raw)) {
 					return true
 				}
-				path := fmt.Sprintf("messages.%d.content.%d", msgIndex, contentIndex)
+				path := fmt.Sprintf("%s.%d.content.%d", messagesKey, msgIndex, contentIndex)
 				if next, ok := setJSONRawBytes(out, path, updated); ok {
 					out = next
 					modified = true
@@ -1289,11 +1432,11 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		modified = true
 	}
 
-	rawModel := gjson.GetBytes(out, "model")
+	rawModel := getTopLevelJSONField(out, "model")
 	if rawModel.Exists() && rawModel.Type == gjson.String {
 		normalized := claude.NormalizeModelID(rawModel.String())
 		if normalized != rawModel.String() {
-			if next, ok := setJSONValueBytes(out, "model", normalized); ok {
+			if next, ok := setTopLevelJSONValueBytes(out, "model", normalized); ok {
 				out = next
 				modified = true
 			}
@@ -1302,8 +1445,8 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	}
 
 	// 确保 tools 字段存在（即使为空数组）
-	if !gjson.GetBytes(out, "tools").Exists() {
-		if next, ok := setJSONRawBytes(out, "tools", []byte("[]")); ok {
+	if !getTopLevelJSONField(out, "tools").Exists() {
+		if next, ok := setTopLevelJSONRawBytes(out, "tools", []byte("[]")); ok {
 			out = next
 			modified = true
 		}
@@ -1316,14 +1459,14 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		}
 	}
 
-	if gjson.GetBytes(out, "temperature").Exists() {
-		if next, ok := deleteJSONPathBytes(out, "temperature"); ok {
+	if getTopLevelJSONField(out, "temperature").Exists() {
+		if next, ok := deleteTopLevelJSONFieldBytes(out, "temperature"); ok {
 			out = next
 			modified = true
 		}
 	}
-	if gjson.GetBytes(out, "tool_choice").Exists() {
-		if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
+	if getTopLevelJSONField(out, "tool_choice").Exists() {
+		if next, ok := deleteTopLevelJSONFieldBytes(out, "tool_choice"); ok {
 			out = next
 			modified = true
 		}
@@ -4032,7 +4175,11 @@ func shouldInjectAnthropicBillingHeader(userAgent string) bool {
 }
 
 func removeSystemBlocksByPrefix(body []byte) []byte {
-	sys := gjson.GetBytes(body, "system")
+	systemKey, ok := resolveTopLevelJSONKey(body, "system")
+	if !ok {
+		return body
+	}
+	sys := gjson.GetBytes(body, systemKey)
 	if !sys.Exists() {
 		return body
 	}
@@ -4040,11 +4187,10 @@ func removeSystemBlocksByPrefix(body []byte) []byte {
 	switch {
 	case sys.Type == gjson.String:
 		if matchesFilterPrefix(sys.Str) {
-			result, err := sjson.DeleteBytes(body, "system")
-			if err != nil {
-				return body
+			if result, ok := deleteJSONPathBytes(body, systemKey); ok {
+				return result
 			}
-			return result
+			return body
 		}
 	case sys.IsArray():
 		var parsed []any
@@ -4063,11 +4209,10 @@ func removeSystemBlocksByPrefix(body []byte) []byte {
 			filtered = append(filtered, item)
 		}
 		if changed {
-			result, err := sjson.SetBytes(body, "system", filtered)
-			if err != nil {
-				return body
+			if result, ok := setJSONValueBytes(body, systemKey, filtered); ok {
+				return result
 			}
-			return result
+			return body
 		}
 	}
 	return body
@@ -4084,10 +4229,8 @@ func resolveBillingHeaderCLIVersion(userAgent string) string {
 }
 
 func extractFirstUserTextBlock(body []byte) string {
-	var req struct {
-		Messages []json.RawMessage `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	messages := getTopLevelJSONField(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
 		return ""
 	}
 
@@ -4116,12 +4259,13 @@ func extractFirstUserTextBlock(body []byte) string {
 		return ""
 	}
 
-	for _, rawMsg := range req.Messages {
+	for _, rawMsg := range messages.Array() {
+		raw := []byte(rawMsg.Raw)
 		var apiShape struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		}
-		if err := json.Unmarshal(rawMsg, &apiShape); err == nil && apiShape.Role == "user" {
+		if err := json.Unmarshal(raw, &apiShape); err == nil && apiShape.Role == "user" {
 			if text := extractContentText(apiShape.Content); text != "" {
 				return text
 			}
@@ -4133,7 +4277,7 @@ func extractFirstUserTextBlock(body []byte) string {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if err := json.Unmarshal(rawMsg, &originShape); err == nil && originShape.Type == "user" {
+		if err := json.Unmarshal(raw, &originShape); err == nil && originShape.Type == "user" {
 			if text := extractContentText(originShape.Message.Content); text != "" {
 				return text
 			}
@@ -4204,52 +4348,55 @@ func upsertAnthropicBillingHeaderSystemBlock(body []byte, userAgent string, requ
 		"type": "text",
 		"text": buildAnthropicBillingHeader(body, userAgent),
 	}
-
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return body
-	}
-
-	switch system := req["system"].(type) {
-	case nil:
-		return body
-	case string:
-		if matchesFilterPrefix(strings.TrimSpace(system)) {
-			req["system"] = []any{billingBlock}
-		} else {
-			return body
-		}
-	case []any:
-		filtered := make([]any, 0, len(system))
-		insertAt := -1
-		for _, item := range system {
-			block, ok := item.(map[string]any)
-			if ok {
-				if text, ok := block["text"].(string); ok && matchesFilterPrefix(text) {
-					if insertAt == -1 {
-						insertAt = len(filtered)
-					}
-					continue
-				}
-			}
-			filtered = append(filtered, item)
-		}
-		if insertAt == -1 {
-			return body
-		}
-		rebuilt := make([]any, 0, len(filtered)+1)
-		rebuilt = append(rebuilt, filtered[:insertAt]...)
-		rebuilt = append(rebuilt, billingBlock)
-		rebuilt = append(rebuilt, filtered[insertAt:]...)
-		req["system"] = rebuilt
-	default:
-		return body
-	}
-	result, err := json.Marshal(req)
+	billingRaw, err := json.Marshal(billingBlock)
 	if err != nil {
 		return body
 	}
-	return result
+	systemKey, ok := resolveTopLevelJSONKey(body, "system")
+	if !ok {
+		return body
+	}
+	system := gjson.GetBytes(body, systemKey)
+
+	switch {
+	case !system.Exists() || system.Type == gjson.Null:
+		return body
+	case system.Type == gjson.String:
+		if matchesFilterPrefix(strings.TrimSpace(system.String())) {
+			if result, ok := setJSONRawBytes(body, systemKey, buildJSONArrayRaw([][]byte{billingRaw})); ok {
+				return result
+			}
+		}
+		return body
+	case system.IsArray():
+		filtered := make([][]byte, 0, len(system.Array()))
+		insertAt := -1
+		system.ForEach(func(_, item gjson.Result) bool {
+			text := item.Get("text")
+			if text.Exists() && text.Type == gjson.String && matchesFilterPrefix(text.String()) {
+				if insertAt == -1 {
+					insertAt = len(filtered)
+				}
+				return true
+			}
+			filtered = append(filtered, []byte(item.Raw))
+			return true
+		})
+		if insertAt == -1 {
+			return body
+		}
+		rebuilt := make([][]byte, 0, len(filtered)+1)
+		rebuilt = append(rebuilt, filtered[:insertAt]...)
+		rebuilt = append(rebuilt, billingRaw)
+		rebuilt = append(rebuilt, filtered[insertAt:]...)
+		if result, ok := setJSONRawBytes(body, systemKey, buildJSONArrayRaw(rebuilt)); ok {
+			return result
+		}
+		return body
+	default:
+		return body
+	}
+	return body
 }
 
 // injectClaudeCodePrompt 在 system 开头注入 Claude Code 提示词
@@ -4347,7 +4494,7 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 		items = [][]byte{claudeCodeBlock}
 	}
 
-	result, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw(items))
+	result, ok := setTopLevelJSONRawBytes(body, "system", buildJSONArrayRaw(items))
 	if !ok {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to inject Claude Code prompt")
 		return body
@@ -4361,52 +4508,58 @@ type cacheControlPath struct {
 }
 
 func collectCacheControlPaths(body []byte) (invalidThinking []cacheControlPath, messagePaths []string, systemPaths []string) {
-	system := gjson.GetBytes(body, "system")
-	if system.IsArray() {
-		sysIndex := 0
-		system.ForEach(func(_, item gjson.Result) bool {
-			if item.Get("cache_control").Exists() {
-				path := fmt.Sprintf("system.%d.cache_control", sysIndex)
-				if item.Get("type").String() == "thinking" {
-					invalidThinking = append(invalidThinking, cacheControlPath{
-						path: path,
-						log:  "[Warning] Removed illegal cache_control from thinking block in system",
-					})
-				} else {
-					systemPaths = append(systemPaths, path)
+	systemKey, hasSystem := resolveTopLevelJSONKey(body, "system")
+	if hasSystem {
+		system := gjson.GetBytes(body, systemKey)
+		if system.IsArray() {
+			sysIndex := 0
+			system.ForEach(func(_, item gjson.Result) bool {
+				if item.Get("cache_control").Exists() {
+					path := fmt.Sprintf("%s.%d.cache_control", systemKey, sysIndex)
+					if item.Get("type").String() == "thinking" {
+						invalidThinking = append(invalidThinking, cacheControlPath{
+							path: path,
+							log:  "[Warning] Removed illegal cache_control from thinking block in system",
+						})
+					} else {
+						systemPaths = append(systemPaths, path)
+					}
 				}
-			}
-			sysIndex++
-			return true
-		})
+				sysIndex++
+				return true
+			})
+		}
 	}
 
-	messages := gjson.GetBytes(body, "messages")
-	if messages.IsArray() {
-		msgIndex := 0
-		messages.ForEach(func(_, msg gjson.Result) bool {
-			content := msg.Get("content")
-			if content.IsArray() {
-				contentIndex := 0
-				content.ForEach(func(_, item gjson.Result) bool {
-					if item.Get("cache_control").Exists() {
-						path := fmt.Sprintf("messages.%d.content.%d.cache_control", msgIndex, contentIndex)
-						if item.Get("type").String() == "thinking" {
-							invalidThinking = append(invalidThinking, cacheControlPath{
-								path: path,
-								log:  fmt.Sprintf("[Warning] Removed illegal cache_control from thinking block in messages[%d].content[%d]", msgIndex, contentIndex),
-							})
-						} else {
-							messagePaths = append(messagePaths, path)
+	messagesKey, hasMessages := resolveTopLevelJSONKey(body, "messages")
+	if hasMessages {
+		messages := gjson.GetBytes(body, messagesKey)
+		if messages.IsArray() {
+			msgIndex := 0
+			messages.ForEach(func(_, msg gjson.Result) bool {
+				content := msg.Get("content")
+				if content.IsArray() {
+					contentIndex := 0
+					content.ForEach(func(_, item gjson.Result) bool {
+						if item.Get("cache_control").Exists() {
+							path := fmt.Sprintf("%s.%d.content.%d.cache_control", messagesKey, msgIndex, contentIndex)
+							if item.Get("type").String() == "thinking" {
+								invalidThinking = append(invalidThinking, cacheControlPath{
+									path: path,
+									log:  fmt.Sprintf("[Warning] Removed illegal cache_control from thinking block in messages[%d].content[%d]", msgIndex, contentIndex),
+								})
+							} else {
+								messagePaths = append(messagePaths, path)
+							}
 						}
-					}
-					contentIndex++
-					return true
-				})
-			}
-			msgIndex++
-			return true
-		})
+						contentIndex++
+						return true
+					})
+				}
+				msgIndex++
+				return true
+			})
+		}
 	}
 
 	return invalidThinking, messagePaths, systemPaths
@@ -5350,8 +5503,8 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
-
-	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
+	req.Header.Set("Connection", "keep-alive")
+	normalizeClaudeHeaderCaseForWire(req.Header)
 
 	return req, nil
 }
@@ -6105,8 +6258,6 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	if account.IsOAuth() {
-		body = moveTopLevelJSONFieldAfter(body, "stream", "system")
-		body = moveAnthropicCacheControlAfterText(body)
 		requestPath := ""
 		if c != nil && c.Request != nil && c.Request.URL != nil {
 			requestPath = c.Request.URL.Path
@@ -6150,6 +6301,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	req.Header.Set("Connection", "keep-alive")
 	if tokenType == "oauth" {
 		applyClaudeOAuthHeaderDefaults(req, reqStream)
 	}
@@ -6196,8 +6348,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
-	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
-
+	normalizeClaudeHeaderCaseForWire(req.Header)
 	return req, nil
 }
 
@@ -6231,11 +6382,11 @@ func (s *GatewayService) getCountTokensBetaHeader(modelID string, clientBetaHead
 }
 
 func requestNeedsBetaFeatures(body []byte) bool {
-	tools := gjson.GetBytes(body, "tools")
+	tools := getTopLevelJSONField(body, "tools")
 	if tools.Exists() && tools.IsArray() && len(tools.Array()) > 0 {
 		return true
 	}
-	thinkingType := gjson.GetBytes(body, "thinking.type").String()
+	thinkingType := getTopLevelJSONField(body, "thinking").Get("type").String()
 	if strings.EqualFold(thinkingType, "enabled") || strings.EqualFold(thinkingType, "adaptive") {
 		return true
 	}
@@ -6243,7 +6394,7 @@ func requestNeedsBetaFeatures(body []byte) bool {
 }
 
 func defaultAPIKeyBetaHeader(body []byte) string {
-	modelID := gjson.GetBytes(body, "model").String()
+	modelID := getTopLevelJSONField(body, "model").String()
 	if strings.Contains(strings.ToLower(modelID), "haiku") {
 		return claude.APIKeyHaikuBetaHeader
 	}
@@ -8691,8 +8842,8 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
-
-	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
+	req.Header.Set("Connection", "keep-alive")
+	normalizeClaudeHeaderCaseForWire(req.Header)
 
 	return req, nil
 }
@@ -8730,9 +8881,6 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			}
 		}
 	}
-	body = moveTopLevelJSONFieldAfter(body, "stream", "system")
-	body = moveAnthropicCacheControlAfterText(body)
-
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -8770,6 +8918,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	req.Header.Set("Connection", "keep-alive")
 	if tokenType == "oauth" {
 		applyClaudeOAuthHeaderDefaults(req, false)
 	}
@@ -8810,8 +8959,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
-	exactCaseWhitelistedHeaderKeys(req.Header, outgoingExactCaseHeaderWhitelist)
-
+	normalizeClaudeHeaderCaseForWire(req.Header)
 	return req, nil
 }
 

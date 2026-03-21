@@ -28,11 +28,11 @@ var (
 var defaultFingerprint = Fingerprint{
 	UserAgent:               "claude-cli/2.1.80 (external, cli)",
 	StainlessLang:           "js",
-	StainlessPackageVersion: "0.70.0",
-	StainlessOS:             "Linux",
+	StainlessPackageVersion: "0.74.0",
+	StainlessOS:             "MacOS",
 	StainlessArch:           "arm64",
 	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v24.13.0",
+	StainlessRuntimeVersion: "v24.3.0",
 }
 
 // Fingerprint represents account fingerprint data

@@ -293,6 +293,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
 		req.Header.Set("x-api-key", authToken)
 	}
+	normalizeClaudeHeaderCaseForWire(req.Header)
 
 	// Get proxy URL
 	proxyURL := ""

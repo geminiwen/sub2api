@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +30,18 @@ func TestReplaceModelInBody_PreservesTopLevelFieldOrder(t *testing.T) {
 	require.Contains(t, resultStr, `"model":"claude-3-5-sonnet-20241022"`)
 }
 
+func TestReplaceModelInBody_PreservesClientKeyCase(t *testing.T) {
+	svc := &GatewayService{}
+	body := []byte(`{"alpha":1,"Model":"claude-3-5-sonnet-latest","messages":[],"omega":2}`)
+
+	result := svc.replaceModelInBody(body, "claude-3-5-sonnet-20241022")
+	resultStr := string(result)
+
+	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"Model"`, `"messages"`, `"omega"`)
+	require.Contains(t, resultStr, `"Model":"claude-3-5-sonnet-20241022"`)
+	require.NotContains(t, resultStr, `"model":"claude-3-5-sonnet-20241022"`)
+}
+
 func TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder(t *testing.T) {
 	body := []byte(`{"alpha":1,"model":"claude-3-5-sonnet-latest","temperature":0.2,"system":"You are OpenCode, the best coding agent on the planet.","messages":[],"tool_choice":{"type":"auto"},"omega":2}`)
 
@@ -40,13 +51,31 @@ func TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder(t *testing.
 	})
 	resultStr := string(result)
 
-	require.Equal(t, claude.NormalizeModelID("claude-3-5-sonnet-latest"), modelID)
+	require.Equal(t, "claude-3-5-sonnet-latest", modelID)
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"model"`, `"system"`, `"messages"`, `"omega"`, `"tools"`, `"metadata"`)
 	require.NotContains(t, resultStr, `"temperature"`)
 	require.NotContains(t, resultStr, `"tool_choice"`)
+	require.Contains(t, resultStr, `"model":"claude-3-5-sonnet-latest"`)
 	require.Contains(t, resultStr, `"system":"`+claudeCodeSystemPrompt+`"`)
 	require.Contains(t, resultStr, `"tools":[]`)
 	require.Contains(t, resultStr, `"metadata":{"user_id":"user-1"}`)
+}
+
+func TestNormalizeClaudeOAuthRequestBody_PreservesExistingKeyCase(t *testing.T) {
+	body := []byte(`{"alpha":1,"Model":"claude-3-5-sonnet-latest","temperature":0.2,"System":"You are OpenCode, the best coding agent on the planet.","Messages":[],"tool_choice":{"type":"auto"},"omega":2}`)
+
+	result, modelID := normalizeClaudeOAuthRequestBody(body, "claude-3-5-sonnet-latest", claudeOAuthNormalizeOptions{
+		injectMetadata: true,
+		metadataUserID: "user-1",
+	})
+	resultStr := string(result)
+
+	require.Equal(t, "claude-3-5-sonnet-latest", modelID)
+	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"Model"`, `"System"`, `"Messages"`, `"omega"`, `"tools"`, `"metadata"`)
+	require.Contains(t, resultStr, `"Model":"claude-3-5-sonnet-latest"`)
+	require.Contains(t, resultStr, `"System":"`+claudeCodeSystemPrompt+`"`)
+	require.NotContains(t, resultStr, `"model":`)
+	require.NotContains(t, resultStr, `"system":`)
 }
 
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
@@ -59,6 +88,16 @@ func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
 
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"system"`, `"messages"`, `"omega"`)
 	require.Contains(t, resultStr, `{"id":"block-1","type":"text","text":"`+claudeCodeSystemPrompt+`\n\nCustom"}`)
+}
+
+func TestUpsertAnthropicBillingHeaderSystemBlock_PreservesTopLevelFieldOrder(t *testing.T) {
+	body := []byte(`{"alpha":1,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=0; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":"hello world"}],"omega":2}`)
+
+	result := upsertAnthropicBillingHeaderSystemBlock(body, "claude-cli/2.1.80 (external, cli)", "/v1/messages")
+	resultStr := string(result)
+
+	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"system"`, `"messages"`, `"omega"`)
+	require.Contains(t, resultStr, anthropicBillingHeaderPrefix)
 }
 
 func TestEnforceCacheControlLimit_PreservesTopLevelFieldOrder(t *testing.T) {
