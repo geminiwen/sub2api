@@ -354,7 +354,6 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 				require.Equal(s.T(), "refresh_token", captured.bodyJSON["grant_type"])
 				require.Equal(s.T(), "rt", captured.bodyJSON["refresh_token"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
-				require.Equal(s.T(), oauth.ScopeRefresh, captured.bodyJSON["scope"])
 				require.Equal(s.T(), "application/json, text/plain, */*", captured.headers.Get("Accept"))
 				require.Equal(s.T(), "gzip, compress, deflate, br", captured.headers.Get("Accept-Encoding"))
 				require.Equal(s.T(), "keep-alive", captured.headers.Get("Connection"))

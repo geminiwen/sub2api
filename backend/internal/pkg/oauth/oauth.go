@@ -27,8 +27,6 @@ const (
 	ScopeOAuth = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	// Scopes - Internal API call
 	ScopeAPI = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-	// Scopes - Refresh token request default
-	ScopeRefresh = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	// Scopes - Setup token (inference only)
 	ScopeInference = "user:inference"
 

@@ -255,7 +255,6 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
 		"client_id":     oauth.ClientID,
-		"scope":         oauth.ScopeRefresh,
 	}
 
 	resp, err := client.R().
