@@ -263,3 +263,152 @@ func TestLogger_ServerErrorProducesErrorLogAtWarnLevel(t *testing.T) {
 		t.Fatalf("expected error log for 500 response, got %+v", events)
 	}
 }
+
+func TestLogger_AccessLogIncludesAbortReasonAndHeaderSummary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := initMiddlewareTestLogger(t)
+
+	r := gin.New()
+	r.Use(RequestLogger())
+	r.Use(Logger())
+	r.POST("/api/event_logging/v2/batch", func(c *gin.Context) {
+		AbortWithError(c, http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/event_logging/v2/batch", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.81 (external, sdk-cli)")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d", w.Code)
+	}
+
+	events := sink.list()
+	found := false
+	for _, event := range events {
+		if event == nil || event.Message != "http request completed" {
+			continue
+		}
+		found = true
+		if event.Fields["error_code"] != "API_KEY_REQUIRED" {
+			t.Fatalf("error_code=%v", event.Fields["error_code"])
+		}
+		if event.Fields["error_message"] != "API key is required" {
+			t.Fatalf("error_message=%v", event.Fields["error_message"])
+		}
+		if event.Fields["hdr_authorization_present"] != true {
+			t.Fatalf("hdr_authorization_present=%v", event.Fields["hdr_authorization_present"])
+		}
+		if event.Fields["hdr_authorization_scheme"] != "Bearer" {
+			t.Fatalf("hdr_authorization_scheme=%v", event.Fields["hdr_authorization_scheme"])
+		}
+		if event.Fields["hdr_authorization_token_fp"] == "" {
+			t.Fatalf("hdr_authorization_token_fp should not be empty")
+		}
+		if event.Fields["hdr_content_type"] != "application/json" {
+			t.Fatalf("hdr_content_type=%v", event.Fields["hdr_content_type"])
+		}
+	}
+	if !found {
+		t.Fatalf("access log event not found")
+	}
+}
+
+func TestLogger_AccessLogIncludesHeaderSummaryForV1Messages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := initMiddlewareTestLogger(t)
+
+	r := gin.New()
+	r.Use(RequestLogger())
+	r.Use(Logger())
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.Set(ContextKeyClientMessagesSessionID, "client-msg-session-123")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("x-api-key", "sk-test-key")
+	req.Header.Set("User-Agent", "claude-cli/2.1.81 (external, sdk-cli)")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+
+	events := sink.list()
+	found := false
+	for _, event := range events {
+		if event == nil || event.Message != "http request completed" {
+			continue
+		}
+		found = true
+		if event.Fields["hdr_x_api_key_present"] != true {
+			t.Fatalf("hdr_x_api_key_present=%v", event.Fields["hdr_x_api_key_present"])
+		}
+		if event.Fields["hdr_x_api_key_fp"] == "" {
+			t.Fatalf("hdr_x_api_key_fp should not be empty")
+		}
+		if event.Fields["hdr_user_agent"] != "claude-cli/2.1.81 (external, sdk-cli)" {
+			t.Fatalf("hdr_user_agent=%v", event.Fields["hdr_user_agent"])
+		}
+		if event.Fields["client_session_id"] != "client-msg-session-123" {
+			t.Fatalf("client_session_id=%v", event.Fields["client_session_id"])
+		}
+	}
+	if !found {
+		t.Fatalf("access log event not found")
+	}
+}
+
+func TestLogger_AccessLogIncludesClientSessionIDsForEventLogging(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := initMiddlewareTestLogger(t)
+
+	r := gin.New()
+	r.Use(RequestLogger())
+	r.Use(Logger())
+	r.POST("/api/event_logging/v2/batch", func(c *gin.Context) {
+		c.Set(ContextKeyClientEventLoggingSessionIDs, []string{"sess-a", "sess-b"})
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/event_logging/v2/batch", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+
+	events := sink.list()
+	found := false
+	for _, event := range events {
+		if event == nil || event.Message != "http request completed" {
+			continue
+		}
+		found = true
+		rawValues, ok := event.Fields["client_session_ids"].([]any)
+		if !ok {
+			t.Fatalf("client_session_ids type=%T", event.Fields["client_session_ids"])
+		}
+		if len(rawValues) != 2 || rawValues[0] != "sess-a" || rawValues[1] != "sess-b" {
+			t.Fatalf("client_session_ids=%v", rawValues)
+		}
+		switch v := event.Fields["client_session_id_count"].(type) {
+		case int:
+			if v != 2 {
+				t.Fatalf("client_session_id_count=%v", v)
+			}
+		case int64:
+			if v != 2 {
+				t.Fatalf("client_session_id_count=%v", v)
+			}
+		default:
+			t.Fatalf("client_session_id_count type=%T", event.Fields["client_session_id_count"])
+		}
+	}
+	if !found {
+		t.Fatalf("access log event not found")
+	}
+}

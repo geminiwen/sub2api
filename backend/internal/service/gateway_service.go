@@ -144,6 +144,8 @@ func normalizeClaudeHeaderCaseForWire(h http.Header) {
 			rewriteAnthropic[lowerKey] = struct{}{}
 		case lowerKey == "x-app":
 			rewriteHeaderCaseForWire(h, lowerKey, "x-app")
+		case lowerKey == "x-service-name":
+			rewriteHeaderCaseForWire(h, lowerKey, "x-service-name")
 		case lowerKey == "x-stainless-os":
 			rewriteHeaderCaseForWire(h, lowerKey, "X-Stainless-OS")
 		}
@@ -151,6 +153,22 @@ func normalizeClaudeHeaderCaseForWire(h http.Header) {
 
 	for key := range rewriteAnthropic {
 		rewriteHeaderCaseForWire(h, key, key)
+	}
+}
+
+func sanitizeAnthropicUpstreamUserAgentHeader(h http.Header) {
+	if h == nil {
+		return
+	}
+	for key, values := range h {
+		if !strings.EqualFold(key, "User-Agent") || len(values) == 0 {
+			continue
+		}
+		sanitized := make([]string, 0, len(values))
+		for _, value := range values {
+			sanitized = append(sanitized, StripUserAgentSourceDescriptor(value, "codehub"))
+		}
+		h[key] = sanitized
 	}
 }
 
@@ -762,6 +780,59 @@ func (s *GatewayService) BindStickySession(ctx context.Context, groupID *int64, 
 		return nil
 	}
 	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, accountID, stickySessionTTL)
+}
+
+// BindTelemetrySessionAliases writes group-agnostic sticky aliases for
+// Claude Code telemetry. Claude OAuth requests may rewrite metadata.user_id
+// session_id before reaching Anthropic; telemetry later reports that rewritten
+// session_id, so we bind both the client and rewritten forms to the same
+// account under the global (group 0) namespace.
+func (s *GatewayService) BindTelemetrySessionAliases(ctx context.Context, account *Account, sessionHash, metadataUserID string) error {
+	if s == nil || s.cache == nil || account == nil || account.ID <= 0 {
+		return nil
+	}
+	if !account.IsOAuth() {
+		return nil
+	}
+
+	aliases := telemetrySessionAliases(account, sessionHash, metadataUserID)
+	for _, alias := range aliases {
+		if err := s.cache.SetSessionAccountID(ctx, 0, alias, account.ID, stickySessionTTL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func telemetrySessionAliases(account *Account, sessionHash, metadataUserID string) []string {
+	seen := make(map[string]struct{}, 4)
+	aliases := make([]string, 0, 3)
+	appendAlias := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		aliases = append(aliases, value)
+	}
+
+	appendAlias(sessionHash)
+
+	if account == nil {
+		return aliases
+	}
+
+	uid := ParseMetadataUserID(metadataUserID)
+	if uid == nil || uid.SessionID == "" {
+		return aliases
+	}
+
+	appendAlias(uid.SessionID)
+	appendAlias(GenerateSessionUUID(fmt.Sprintf("%d::%s", account.ID, uid.SessionID)))
+	return aliases
 }
 
 // GetCachedSessionAccountID retrieves the account ID bound to a sticky session.
@@ -6377,6 +6448,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
+	sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
+	sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
 	normalizeClaudeHeaderCaseForWire(req.Header)
 	return req, nil
 }
@@ -9001,6 +9074,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
+	sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
+	sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
 	normalizeClaudeHeaderCaseForWire(req.Header)
 	return req, nil
 }

@@ -187,7 +187,8 @@ func RegisterGatewayRoutes(
 	r.GET("/sora/media-signed/*filepath", h.SoraGateway.MediaProxySigned)
 
 	// Tengu telemetry proxy（兼容 Anthropic 1P event_logging 协议）
-	tenguMiddlewares := []gin.HandlerFunc{bodyLimit, clientRequestID, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic}
+	// Claude Code 1P telemetry 不携带 API key，不能挂鉴权中间件。
+	tenguMiddlewares := []gin.HandlerFunc{bodyLimit, clientRequestID}
 	r.POST("/api/event_logging/v2/batch", append(tenguMiddlewares, h.Tengu.BatchEvents)...)
 }
 

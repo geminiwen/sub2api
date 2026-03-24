@@ -79,6 +79,19 @@ const backendModeCacheTTL = 60 * time.Second
 const backendModeErrorTTL = 5 * time.Second
 const backendModeDBTimeout = 5 * time.Second
 
+// cachedCodeHubClientAccessRestriction restrict_codehub_client_access cache (in-process, 60s TTL)
+type cachedCodeHubClientAccessRestriction struct {
+	value     bool
+	expiresAt int64 // unix nano
+}
+
+var codeHubClientAccessRestrictionCache atomic.Value // *cachedCodeHubClientAccessRestriction
+var codeHubClientAccessRestrictionSF singleflight.Group
+
+const codeHubClientAccessRestrictionCacheTTL = 60 * time.Second
+const codeHubClientAccessRestrictionErrorTTL = 5 * time.Second
+const codeHubClientAccessRestrictionDBTimeout = 5 * time.Second
+
 // DefaultSubscriptionGroupReader validates group references used by default subscriptions.
 type DefaultSubscriptionGroupReader interface {
 	GetByID(ctx context.Context, id int64) (*Group, error)
@@ -503,6 +516,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	// Claude Code version check
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
 	updates[SettingKeyMaxClaudeCodeVersion] = settings.MaxClaudeCodeVersion
+	updates[SettingKeyRestrictCodeHubClientAccess] = strconv.FormatBool(settings.RestrictCodeHubClientAccess)
 
 	// 分组隔离
 	updates[SettingKeyAllowUngroupedKeyScheduling] = strconv.FormatBool(settings.AllowUngroupedKeyScheduling)
@@ -518,6 +532,11 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 			min:       settings.MinClaudeCodeVersion,
 			max:       settings.MaxClaudeCodeVersion,
 			expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
+		})
+		codeHubClientAccessRestrictionSF.Forget("restrict_codehub_client_access")
+		codeHubClientAccessRestrictionCache.Store(&cachedCodeHubClientAccessRestriction{
+			value:     settings.RestrictCodeHubClientAccess,
+			expiresAt: time.Now().Add(codeHubClientAccessRestrictionCacheTTL).UnixNano(),
 		})
 		backendModeSF.Forget("backend_mode")
 		backendModeCache.Store(&cachedBackendMode{
@@ -617,6 +636,51 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 		backendModeCache.Store(&cachedBackendMode{
 			value:     enabled,
 			expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
+		})
+		return enabled, nil
+	})
+	if val, ok := result.(bool); ok {
+		return val
+	}
+	return false
+}
+
+// IsCodeHubClientAccessRestricted checks whether Claude Code related endpoints
+// should only accept clients whose User-Agent includes the codehub marker.
+func (s *SettingService) IsCodeHubClientAccessRestricted(ctx context.Context) bool {
+	if cached, ok := codeHubClientAccessRestrictionCache.Load().(*cachedCodeHubClientAccessRestriction); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+	result, _, _ := codeHubClientAccessRestrictionSF.Do("restrict_codehub_client_access", func() (any, error) {
+		if cached, ok := codeHubClientAccessRestrictionCache.Load().(*cachedCodeHubClientAccessRestriction); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.value, nil
+			}
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codeHubClientAccessRestrictionDBTimeout)
+		defer cancel()
+		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyRestrictCodeHubClientAccess)
+		if err != nil {
+			if errors.Is(err, ErrSettingNotFound) {
+				codeHubClientAccessRestrictionCache.Store(&cachedCodeHubClientAccessRestriction{
+					value:     false,
+					expiresAt: time.Now().Add(codeHubClientAccessRestrictionCacheTTL).UnixNano(),
+				})
+				return false, nil
+			}
+			slog.Warn("failed to get restrict_codehub_client_access setting", "error", err)
+			codeHubClientAccessRestrictionCache.Store(&cachedCodeHubClientAccessRestriction{
+				value:     false,
+				expiresAt: time.Now().Add(codeHubClientAccessRestrictionErrorTTL).UnixNano(),
+			})
+			return false, nil
+		}
+		enabled := value == "true"
+		codeHubClientAccessRestrictionCache.Store(&cachedCodeHubClientAccessRestriction{
+			value:     enabled,
+			expiresAt: time.Now().Add(codeHubClientAccessRestrictionCacheTTL).UnixNano(),
 		})
 		return enabled, nil
 	})
@@ -780,8 +844,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpsMetricsIntervalSeconds:    "60",
 
 		// Claude Code version check (default: empty = disabled)
-		SettingKeyMinClaudeCodeVersion: "",
-		SettingKeyMaxClaudeCodeVersion: "",
+		SettingKeyMinClaudeCodeVersion:        "",
+		SettingKeyMaxClaudeCodeVersion:        "",
+		SettingKeyRestrictCodeHubClientAccess: "false",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
 		SettingKeyAllowUngroupedKeyScheduling: "false",
@@ -919,6 +984,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// Claude Code version check
 	result.MinClaudeCodeVersion = settings[SettingKeyMinClaudeCodeVersion]
 	result.MaxClaudeCodeVersion = settings[SettingKeyMaxClaudeCodeVersion]
+	result.RestrictCodeHubClientAccess = settings[SettingKeyRestrictCodeHubClientAccess] == "true"
 
 	// 分组隔离
 	result.AllowUngroupedKeyScheduling = settings[SettingKeyAllowUngroupedKeyScheduling] == "true"

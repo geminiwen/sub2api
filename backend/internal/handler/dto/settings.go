@@ -86,8 +86,9 @@ type SystemSettings struct {
 	OpsQueryModeDefault          string `json:"ops_query_mode_default"`
 	OpsMetricsIntervalSeconds    int    `json:"ops_metrics_interval_seconds"`
 
-	MinClaudeCodeVersion string `json:"min_claude_code_version"`
-	MaxClaudeCodeVersion string `json:"max_claude_code_version"`
+	MinClaudeCodeVersion        string `json:"min_claude_code_version"`
+	MaxClaudeCodeVersion        string `json:"max_claude_code_version"`
+	RestrictCodeHubClientAccess bool   `json:"restrict_codehub_client_access"`
 
 	// 分组隔离
 	AllowUngroupedKeyScheduling bool `json:"allow_ungrouped_key_scheduling"`

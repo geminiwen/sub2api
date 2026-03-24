@@ -56,6 +56,40 @@ func TestValidate_ClaudeCLIUserAgent(t *testing.T) {
 	}
 }
 
+func TestUserAgentHasSourceDescriptor(t *testing.T) {
+	require.True(t, UserAgentHasSourceDescriptor("claude-cli/2.1.81 (external, cli, codehub)", "codehub"))
+	require.True(t, UserAgentHasSourceDescriptor("claude-cli/2.1.81 (external, cli, CodeHub)", "codehub"))
+	require.False(t, UserAgentHasSourceDescriptor("claude-cli/2.1.81 (external, cli)", "codehub"))
+}
+
+func TestStripUserAgentSourceDescriptor(t *testing.T) {
+	require.Equal(
+		t,
+		"claude-cli/2.1.81 (external, cli)",
+		StripUserAgentSourceDescriptor("claude-cli/2.1.81 (external, cli, codehub)", "codehub"),
+	)
+	require.Equal(
+		t,
+		"claude-cli/2.1.81",
+		StripUserAgentSourceDescriptor("claude-cli/2.1.81 (codehub)", "codehub"),
+	)
+	require.Equal(
+		t,
+		"claude-code/2.1.81 (external, cli)",
+		StripUserAgentSourceDescriptor("claude-code/2.1.81 (external, cli, codehub)", "codehub"),
+	)
+	require.Equal(
+		t,
+		"claude-cli/2.1.81 (external, cli)",
+		StripUserAgentSourceDescriptor("claude-cli/2.1.81 (external, codehub, cli)", "codehub"),
+	)
+	require.Equal(
+		t,
+		"claude-cli/2.1.81 (cli, external)",
+		StripUserAgentSourceDescriptor("claude-cli/2.1.81 (codehub, cli, external)", "codehub"),
+	)
+}
+
 func TestValidate_NonMessagesPath_UAOnly(t *testing.T) {
 	v := newTestValidator()
 

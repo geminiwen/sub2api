@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -14,13 +17,15 @@ import (
 
 // TenguHandler handles Tengu telemetry proxy requests.
 type TenguHandler struct {
-	tenguService *service.TenguProxyService
+	tenguService   *service.TenguProxyService
+	settingService *service.SettingService
 }
 
 // NewTenguHandler creates a new TenguHandler.
-func NewTenguHandler(tenguService *service.TenguProxyService) *TenguHandler {
+func NewTenguHandler(tenguService *service.TenguProxyService, settingService *service.SettingService) *TenguHandler {
 	return &TenguHandler{
-		tenguService: tenguService,
+		tenguService:   tenguService,
+		settingService: settingService,
 	}
 }
 
@@ -29,15 +34,15 @@ func NewTenguHandler(tenguService *service.TenguProxyService) *TenguHandler {
 // sticky-session-bound account, enriches identity fields, and forwards to
 // api.anthropic.com. Events without a resolvable session_id are dropped.
 func (h *TenguHandler) BatchEvents(c *gin.Context) {
-	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
+	if !validateCodeHubClientUserAgent(c, h.settingService, func(c *gin.Context, status int, errType, message string) {
+		c.JSON(status, gin.H{
 			"type": "error",
 			"error": gin.H{
-				"type":    "authentication_error",
-				"message": "Invalid API key",
+				"type":    errType,
+				"message": message,
 			},
 		})
+	}) {
 		return
 	}
 
@@ -64,20 +69,18 @@ func (h *TenguHandler) BatchEvents(c *gin.Context) {
 		return
 	}
 
-	var groupID *int64
-	if apiKey.Group != nil {
-		groupID = &apiKey.Group.ID
+	if sessionIDs := extractTelemetryClientSessionIDs(body); len(sessionIDs) > 0 {
+		c.Set(middleware.ContextKeyClientEventLoggingSessionIDs, sessionIDs)
 	}
 
 	result, err := h.tenguService.ProcessAndForward(
 		c.Request.Context(),
 		body,
-		groupID,
+		nil,
 		c.Request.Header,
 	)
 	if err != nil {
 		logger.L().Error("tengu: process and forward failed",
-			zap.Int64("api_key_id", apiKey.ID),
 			zap.Error(err),
 		)
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -98,4 +101,32 @@ func (h *TenguHandler) BatchEvents(c *gin.Context) {
 		"accepted_count": result.AcceptedCount + result.DroppedEvents,
 		"rejected_count": result.RejectedCount,
 	})
+}
+
+func extractTelemetryClientSessionIDs(body []byte) []string {
+	var batch struct {
+		Events []struct {
+			EventData map[string]any `json:"event_data"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(batch.Events))
+	sessionIDs := make([]string, 0, len(batch.Events))
+	for _, event := range batch.Events {
+		sessionID, _ := event.EventData["session_id"].(string)
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+	return sessionIDs
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	gocache "github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/require"
@@ -202,7 +203,7 @@ func TestEnrichEventData_OverwriteAll(t *testing.T) {
 		},
 	}
 
-	enrichEventData(data, meta, account)
+	enrichEventData(data, meta, account, "")
 
 	// All identity fields overwritten with server values
 	require.Equal(t, "server@example.com", data["email"])
@@ -228,7 +229,7 @@ func TestEnrichEventData_SessionIDMapping(t *testing.T) {
 		"session_id": "e15f3697-61e5-4e66-9575-ef8ccfe93e61",
 	}
 
-	enrichEventData(data, meta, account)
+	enrichEventData(data, meta, account, "")
 
 	expected := GenerateSessionUUID("99::e15f3697-61e5-4e66-9575-ef8ccfe93e61")
 	require.Equal(t, expected, data["session_id"])
@@ -245,7 +246,7 @@ func TestEnrichEventData_AuthCreatedWhenMissing(t *testing.T) {
 		"event_name": "tengu_test",
 	}
 
-	enrichEventData(data, meta, account)
+	enrichEventData(data, meta, account, "")
 
 	auth, ok := data["auth"].(map[string]any)
 	require.True(t, ok)
@@ -262,7 +263,7 @@ func TestEnrichEventData_EmptyMetaNoOverwrite(t *testing.T) {
 		"device_id": "keep-device",
 	}
 
-	enrichEventData(data, meta, account)
+	enrichEventData(data, meta, account, "")
 
 	// When server meta is empty, client values stay (nothing to overwrite with)
 	require.Equal(t, "keep@example.com", data["email"])
@@ -304,6 +305,67 @@ func TestProcessAndForward_StickySessionRouting(t *testing.T) {
 	upstream.mu.Lock()
 	require.Equal(t, 2, len(upstream.bodies))
 	upstream.mu.Unlock()
+}
+
+func TestProcessAndForward_UsesFixedTelemetryUpstreamHeaders(t *testing.T) {
+	acc := tenguTestAccount(1, "acc@test.com", "acc-uuid", "org-uuid", "device1hex")
+	cache := &stubTenguGatewayCache{
+		bindings: map[string]int64{
+			"sess-A": 1,
+		},
+	}
+
+	gw := newTenguTestGatewayService([]Account{acc}, cache)
+	upstream := &stubTenguHTTPUpstream{acceptedPerCall: []int{1}}
+	svc := NewTenguProxyService(gw, upstream)
+
+	body := makeTenguBatchBody(
+		map[string]any{
+			"event_name": "e1",
+			"session_id": "sess-A",
+			"model":      "claude-opus-4-6",
+		},
+	)
+
+	_, err := svc.ProcessAndForward(tenguCtx(), body, nil, http.Header{
+		"User-Agent":      []string{"claude-cli/2.1.81 (external, cli, codehub)"},
+		"x-service-name":  []string{"wrong-value"},
+		"anthropic-beta":  []string{"context-1m-2025-08-07"},
+		"Accept-Encoding": []string{"gzip"},
+	})
+	require.NoError(t, err)
+
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "application/json, text/plain, */*", upstream.requests[0].Header.Get("Accept"))
+	require.Equal(t, "gzip, compress, deflate, br", upstream.requests[0].Header.Get("Accept-Encoding"))
+	require.Equal(t, "claude-cli/2.1.81 (external, cli)", upstream.requests[0].Header.Get("User-Agent"))
+	require.Equal(t, []string{"claude-code"}, upstream.requests[0].Header["x-service-name"])
+	require.Equal(t, []string{"oauth-2025-04-20"}, upstream.requests[0].Header["anthropic-beta"])
+}
+
+func TestForwardBatch_WritesTelemetryHeadersWithRequiredWireCase(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/api/event_logging/v2/batch", bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip, compress, deflate, br")
+	req.Header.Set("x-service-name", "claude-code")
+	req.Header.Set("anthropic-beta", claude.BetaOAuth)
+	normalizeClaudeHeaderCaseForWire(req.Header)
+
+	var buf bytes.Buffer
+	require.NoError(t, req.Write(&buf))
+	wire := buf.String()
+
+	require.Contains(t, wire, "Accept: application/json, text/plain, */*\r\n")
+	require.Contains(t, wire, "x-service-name: claude-code\r\n")
+	require.Contains(t, wire, "anthropic-beta: oauth-2025-04-20\r\n")
+	require.NotContains(t, wire, "X-Service-Name:")
+	require.NotContains(t, wire, "Anthropic-Beta:")
 }
 
 func TestProcessAndForward_DropNoSessionID(t *testing.T) {
@@ -427,6 +489,8 @@ func TestProcessAndForward_EnrichedBodyContent(t *testing.T) {
 			"session_id": "client-sess",
 			"device_id":  "old-device",
 			"email":      "old@client.com",
+			"model":      "claude-opus-4-6[1m]",
+			"betas":      "context-1m-2025-08-07,prompt-caching-scope-2026-01-05",
 			"auth": map[string]any{
 				"account_uuid":      "old-acc",
 				"organization_uuid": "old-org",
@@ -456,6 +520,11 @@ func TestProcessAndForward_EnrichedBodyContent(t *testing.T) {
 	require.Equal(t, "srv-device-hex", ed["device_id"])
 	require.Equal(t, GenerateSessionUUID("42::client-sess"), ed["session_id"])
 	require.Equal(t, "tengu_paste_text", ed["event_name"]) // preserved
+	require.Equal(
+		t,
+		gw.getBetaHeader("claude-opus-4-6[1m]", "context-1m-2025-08-07,prompt-caching-scope-2026-01-05"),
+		ed["betas"],
+	)
 
 	auth, ok := ed["auth"].(map[string]any)
 	require.True(t, ok)

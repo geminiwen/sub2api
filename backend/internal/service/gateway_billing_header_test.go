@@ -224,6 +224,7 @@ func TestNormalizeClaudeHeaderCaseForWire_RewritesSelectedHeaders(t *testing.T) 
 	req.Header.Set("Anthropic-Version", "2023-06-01")
 	req.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	req.Header.Set("X-App", "cli")
+	req.Header.Set("X-Service-Name", "claude-code")
 	req.Header.Set("X-Stainless-OS", "MacOS")
 
 	normalizeClaudeHeaderCaseForWire(req.Header)
@@ -236,12 +237,50 @@ func TestNormalizeClaudeHeaderCaseForWire_RewritesSelectedHeaders(t *testing.T) 
 	require.Contains(t, wire, "anthropic-version: 2023-06-01\r\n")
 	require.Contains(t, wire, "anthropic-dangerous-direct-browser-access: true\r\n")
 	require.Contains(t, wire, "x-app: cli\r\n")
+	require.Contains(t, wire, "x-service-name: claude-code\r\n")
 	require.Contains(t, wire, "X-Stainless-OS: MacOS\r\n")
 	require.NotContains(t, wire, "Anthropic-Beta:")
 	require.NotContains(t, wire, "Anthropic-Version:")
 	require.NotContains(t, wire, "Anthropic-Dangerous-Direct-Browser-Access:")
 	require.NotContains(t, wire, "X-App:")
+	require.NotContains(t, wire, "X-Service-Name:")
 	require.NotContains(t, wire, "X-Stainless-Os:")
+}
+
+func TestSanitizeAnthropicUpstreamUserAgentHeader_StripsCodeHubMarker(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "tail",
+			in:   "claude-cli/2.1.81 (external, cli, codehub)",
+			want: "claude-cli/2.1.81 (external, cli)",
+		},
+		{
+			name: "middle",
+			in:   "claude-cli/2.1.81 (external, codehub, cli)",
+			want: "claude-cli/2.1.81 (external, cli)",
+		},
+		{
+			name: "head",
+			in:   "claude-cli/2.1.81 (codehub, cli, external)",
+			want: "claude-cli/2.1.81 (cli, external)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+			require.NoError(t, err)
+
+			req.Header.Set("User-Agent", tt.in)
+			sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
+
+			require.Equal(t, tt.want, req.Header.Get("User-Agent"))
+		})
+	}
 }
 
 func TestBuildAnthropicBillingHeader_PreservesClientEntrypoint(t *testing.T) {

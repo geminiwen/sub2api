@@ -230,6 +230,9 @@ const (
 	// SettingKeyMaxClaudeCodeVersion 最高 Claude Code 版本号限制 (semver, 如 "3.0.0"，空值=不检查)
 	SettingKeyMaxClaudeCodeVersion = "max_claude_code_version"
 
+	// SettingKeyRestrictCodeHubClientAccess 限制只有带 codehub 标记的客户端才能访问 Claude Code 相关端点
+	SettingKeyRestrictCodeHubClientAccess = "restrict_codehub_client_access"
+
 	// SettingKeyAllowUngroupedKeyScheduling 允许未分组 API Key 调度（默认 false：未分组 Key 返回 403）
 	SettingKeyAllowUngroupedKeyScheduling = "allow_ungrouped_key_scheduling"
 

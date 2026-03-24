@@ -4157,6 +4157,7 @@ export default {
       claudeCode: {
         title: 'Claude Code Settings',
         description: 'Control Claude Code client access requirements',
+        restrictCodeHubAccess: 'Restrict CodeHub Client Access',
         minVersion: 'Minimum Version',
         minVersionPlaceholder: 'e.g. 2.1.63',
         minVersionHint:

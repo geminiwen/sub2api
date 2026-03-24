@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -85,7 +87,7 @@ func (s *TenguProxyService) ProcessAndForward(
 	type enrichedEvent struct {
 		raw json.RawMessage
 	}
-	accountEvents := make(map[int64][]json.RawMessage) // accountID → enriched raw events
+	accountEvents := make(map[int64][]json.RawMessage)
 
 	for _, rawEvent := range batch.Events {
 		// Parse event to get session_id
@@ -115,6 +117,9 @@ func (s *TenguProxyService) ProcessAndForward(
 			accountCache[sessionID] = info // may be nil
 		}
 		if info == nil {
+			logger.L().Warn("tengu: dropping event due to unresolved session binding",
+				zap.String("session_id", sessionID),
+			)
 			result.DroppedEvents++
 			continue
 		}
@@ -132,7 +137,12 @@ func (s *TenguProxyService) ProcessAndForward(
 		}
 
 		// Enrich event_data in place
-		enrichEventData(wrapper.EventData, info.Meta, info.Account)
+		enrichEventData(
+			wrapper.EventData,
+			info.Meta,
+			info.Account,
+			s.buildTelemetryEventBetas(wrapper.EventData),
+		)
 
 		// Re-encode the full event wrapper
 		enriched, err := json.Marshal(wrapper)
@@ -152,6 +162,11 @@ func (s *TenguProxyService) ProcessAndForward(
 		}
 	}
 
+	// If all events were dropped, nothing to forward — return success immediately.
+	if len(accountEvents) == 0 {
+		return result, nil
+	}
+
 	for accountID, events := range accountEvents {
 		info := infoByID[accountID]
 		if info == nil {
@@ -160,7 +175,7 @@ func (s *TenguProxyService) ProcessAndForward(
 
 		batchBody, err := json.Marshal(map[string]any{"events": events})
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("marshal batch for account %d: %w", accountID, err)
 		}
 
 		accepted, rejected, err := s.forwardBatch(ctx, batchBody, info, clientHeaders)
@@ -169,7 +184,7 @@ func (s *TenguProxyService) ProcessAndForward(
 				zap.Int64("account_id", accountID),
 				zap.Error(err),
 			)
-			continue
+			return nil, err
 		}
 		result.AcceptedCount += accepted
 		result.RejectedCount += rejected
@@ -181,12 +196,36 @@ func (s *TenguProxyService) ProcessAndForward(
 // resolveAccount looks up the sticky session for sessionID, selects the bound
 // account, and builds its metadata. Returns nil if resolution fails.
 func (s *TenguProxyService) resolveAccount(ctx context.Context, groupID *int64, sessionID string) *tenguAccountInfo {
+	if direct := s.resolveAccountFromStickyAlias(ctx, sessionID); direct != nil {
+		return direct
+	}
+
 	res, err := s.gatewayService.SelectAccountWithLoadAwareness(ctx, groupID, sessionID, "", nil, "")
 	if err != nil || res == nil || res.Account == nil {
 		return nil
 	}
 
-	account := res.Account
+	return s.buildAccountInfo(ctx, res.Account)
+}
+
+func (s *TenguProxyService) resolveAccountFromStickyAlias(ctx context.Context, sessionID string) *tenguAccountInfo {
+	accountID, err := s.gatewayService.GetCachedSessionAccountID(ctx, nil, sessionID)
+	if err != nil || accountID <= 0 || s.gatewayService == nil || s.gatewayService.accountRepo == nil {
+		return nil
+	}
+
+	account, err := s.gatewayService.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return nil
+	}
+
+	return s.buildAccountInfo(ctx, account)
+}
+
+func (s *TenguProxyService) buildAccountInfo(ctx context.Context, account *Account) *tenguAccountInfo {
+	if account == nil {
+		return nil
+	}
 
 	token, _, err := s.gatewayService.GetAccessToken(ctx, account)
 	if err != nil {
@@ -225,17 +264,17 @@ func (s *TenguProxyService) forwardBatch(
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.Token)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip, compress, deflate, br")
+	req.Header.Set("x-service-name", "claude-code")
+	req.Header.Set("anthropic-beta", claude.BetaOAuth)
 
 	if ua := clientHeaders.Get("User-Agent"); ua != "" {
-		req.Header.Set("User-Agent", ua)
+		req.Header.Set("User-Agent", StripUserAgentSourceDescriptor(ua, "codehub"))
 	}
-	if beta := clientHeaders.Get("anthropic-beta"); beta != "" {
-		req.Header.Set("anthropic-beta", beta)
-	}
-	if svc := clientHeaders.Get("x-service-name"); svc != "" {
-		req.Header.Set("x-service-name", svc)
-	}
+	sanitizeAnthropicUpstreamUserAgentHeader(req.Header)
+	normalizeClaudeHeaderCaseForWire(req.Header)
 
 	account := info.Account
 	proxyURL := ""
@@ -249,17 +288,66 @@ func (s *TenguProxyService) forwardBatch(
 	}
 	defer DrainAndClose(resp.Body)
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read upstream response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, 0, fmt.Errorf("upstream returned non-2xx status %d: %s", resp.StatusCode, string(respBody))
+	}
+
 	// Parse upstream response: {"accepted_count": N, "rejected_count": N}
 	var upstreamResp struct {
 		AcceptedCount int `json:"accepted_count"`
 		RejectedCount int `json:"rejected_count"`
 	}
-	respBody, err := io.ReadAll(resp.Body)
-	if err == nil {
-		_ = json.Unmarshal(respBody, &upstreamResp)
-	}
+	_ = json.Unmarshal(respBody, &upstreamResp)
 
 	return upstreamResp.AcceptedCount, upstreamResp.RejectedCount, nil
+}
+
+func (s *TenguProxyService) buildTelemetryEventBetas(eventData map[string]any) string {
+	modelID := telemetryEventModel(eventData)
+	clientBetas := telemetryEventBetas(eventData)
+	if s != nil && s.gatewayService != nil {
+		return s.gatewayService.getBetaHeader(modelID, clientBetas)
+	}
+
+	isHaikuModel := strings.Contains(strings.ToLower(modelID), "haiku")
+	defaultBetaHeader := claude.DefaultBetaHeader
+	if isHaikuModel {
+		defaultBetaHeader = claude.HaikuBetaHeader
+	} else if containsBetaToken(clientBetas, claude.BetaContext1M) {
+		defaultBetaHeader = claude.DefaultBetaHeaderWithContext1M
+	}
+	if clientBetas != "" {
+		return mergeAnthropicBeta(strings.Split(defaultBetaHeader, ","), clientBetas)
+	}
+	return defaultBetaHeader
+}
+
+func telemetryEventModel(eventData map[string]any) string {
+	if eventData == nil {
+		return ""
+	}
+	for _, key := range []string{"model", "model_id", "modelId"} {
+		if value, ok := eventData[key].(string); ok {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func telemetryEventBetas(eventData map[string]any) string {
+	if eventData == nil {
+		return ""
+	}
+	value, _ := eventData["betas"].(string)
+	return strings.TrimSpace(value)
 }
 
 // enrichEventData overwrites identity fields inside a single event_data object
@@ -270,12 +358,15 @@ func (s *TenguProxyService) forwardBatch(
 //
 //	seed = fmt.Sprintf("%d::%s", account.ID, clientSessionID)
 //	stickySessionID = GenerateSessionUUID(seed)
-func enrichEventData(data map[string]any, meta *TenguAccountMetadata, account *Account) {
+func enrichEventData(data map[string]any, meta *TenguAccountMetadata, account *Account, betas string) {
 	if meta.Email != "" {
 		data["email"] = meta.Email
 	}
 	if meta.DeviceID != "" {
 		data["device_id"] = meta.DeviceID
+	}
+	if strings.TrimSpace(betas) != "" {
+		data["betas"] = betas
 	}
 
 	// session_id: derive sticky session UUID

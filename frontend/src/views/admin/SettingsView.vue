@@ -1117,7 +1117,15 @@
             </p>
           </div>
           <div class="p-6">
-            <div>
+            <div class="flex items-center justify-between">
+              <div class="pr-6">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.claudeCode.restrictCodeHubAccess') }}
+                </label>
+              </div>
+              <Toggle v-model="form.restrict_codehub_client_access" />
+            </div>
+            <div class="mt-4">
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                 {{ t('admin.settings.claudeCode.minVersion') }}
               </label>
@@ -2067,6 +2075,7 @@ const form = reactive<SettingsForm>({
   ops_query_mode_default: 'auto',
   ops_metrics_interval_seconds: 60,
   // Claude Code version check
+  restrict_codehub_client_access: false,
   min_claude_code_version: '',
   max_claude_code_version: '',
   // 分组隔离
@@ -2375,6 +2384,7 @@ async function saveSettings() {
       fallback_model_antigravity: form.fallback_model_antigravity,
       enable_identity_patch: form.enable_identity_patch,
       identity_patch_prompt: form.identity_patch_prompt,
+      restrict_codehub_client_access: form.restrict_codehub_client_access,
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling

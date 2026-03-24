@@ -154,9 +154,15 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	if uid := service.ParseMetadataUserID(parsedReq.MetadataUserID); uid != nil && strings.TrimSpace(uid.SessionID) != "" {
+		c.Set(middleware2.ContextKeyClientMessagesSessionID, strings.TrimSpace(uid.SessionID))
+	}
 	reqModel := parsedReq.Model
 	reqStream := parsedReq.Stream
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	if !validateCodeHubClientUserAgent(c, h.settingService, h.errorResponse) {
+		return
+	}
 
 	// 设置 max_tokens=1 + haiku 探测请求标识到 context 中
 	// 必须在 SetClaudeCodeClientContext 之前设置，因为 ClaudeCodeValidator 需要读取此标识进行绕过判断
@@ -588,12 +594,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 				// Slot acquired: no longer waiting in queue.
 				releaseWait()
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
-					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
 			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+
+			if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
+				reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			}
+			if err := h.gatewayService.BindTelemetrySessionAliases(c.Request.Context(), account, sessionKey, parsedReq.MetadataUserID); err != nil {
+				reqLog.Warn("gateway.bind_telemetry_session_aliases_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			}
 
 			// ===== 用户消息串行队列 START =====
 			var queueRelease func()
@@ -1384,6 +1394,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	if !validateCodeHubClientUserAgent(c, h.settingService, h.errorResponse) {
+		return
+	}
 	// count_tokens 走 messages 严格校验时，复用已解析请求，避免二次反序列化。
 	SetClaudeCodeClientContext(c, body, parsedReq)
 	reqLog = reqLog.With(zap.String("model", parsedReq.Model), zap.Bool("stream", parsedReq.Stream))
@@ -1433,6 +1446,23 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		// 错误响应已在 ForwardCountTokens 中处理
 		return
 	}
+}
+
+func validateCodeHubClientUserAgent(c *gin.Context, settingService *service.SettingService, errorWriter func(*gin.Context, int, string, string)) bool {
+	if c == nil || c.Request == nil {
+		return true
+	}
+	if settingService == nil || !settingService.IsCodeHubClientAccessRestricted(c.Request.Context()) {
+		return true
+	}
+	ua := strings.TrimSpace(c.GetHeader("User-Agent"))
+	if service.UserAgentHasSourceDescriptor(ua, "codehub") {
+		return true
+	}
+	if errorWriter != nil {
+		errorWriter(c, http.StatusBadRequest, "invalid_request_error", "User-Agent must include codehub source marker")
+	}
+	return false
 }
 
 // InterceptType 表示请求拦截类型

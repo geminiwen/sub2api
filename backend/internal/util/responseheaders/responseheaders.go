@@ -29,9 +29,11 @@ var defaultAllowed = map[string]struct{}{
 	"x-ratelimit-remaining-tokens":   {},
 	"x-ratelimit-reset-requests":     {},
 	"x-ratelimit-reset-tokens":       {},
-	"retry-after":                    {},
-	"location":                       {},
-	"www-authenticate":               {},
+	"retry-after":                                         {},
+	"location":                                            {},
+	"www-authenticate":                                    {},
+	"anthropic-ratelimit-unified-overage-status":           {},
+	"anthropic-ratelimit-unified-overage-disabled-reason":  {},
 }
 
 // hopByHopHeaders 是跳过的 hop-by-hop 头部，这些头部由 HTTP 库自动处理

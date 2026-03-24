@@ -83,6 +83,7 @@ export interface SystemSettings {
   // Claude Code version check
   min_claude_code_version: string
   max_claude_code_version: string
+  restrict_codehub_client_access: boolean
 
   // 分组隔离
   allow_ungrouped_key_scheduling: boolean
@@ -141,6 +142,7 @@ export interface UpdateSettingsRequest {
   ops_metrics_interval_seconds?: number
   min_claude_code_version?: string
   max_claude_code_version?: string
+  restrict_codehub_client_access?: boolean
   allow_ungrouped_key_scheduling?: boolean
 }
 

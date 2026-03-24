@@ -24,6 +24,10 @@ const (
 	ContextKeySubscription ContextKey = "subscription"
 	// ContextKeyForcePlatform 强制平台（用于 /antigravity 路由）
 	ContextKeyForcePlatform ContextKey = "force_platform"
+	// ContextKeyErrorCode 当前请求返回给客户端的错误码
+	ContextKeyErrorCode ContextKey = "error_code"
+	// ContextKeyErrorMessage 当前请求返回给客户端的错误消息
+	ContextKeyErrorMessage ContextKey = "error_message"
 )
 
 // ForcePlatform 返回设置强制平台的中间件
@@ -71,6 +75,8 @@ func NewErrorResponse(code, message string) ErrorResponse {
 
 // AbortWithError 中断请求并返回JSON错误
 func AbortWithError(c *gin.Context, statusCode int, code, message string) {
+	c.Set(string(ContextKeyErrorCode), code)
+	c.Set(string(ContextKeyErrorMessage), message)
 	c.JSON(statusCode, NewErrorResponse(code, message))
 	c.Abort()
 }

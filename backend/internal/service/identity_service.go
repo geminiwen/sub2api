@@ -130,6 +130,7 @@ func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fin
 
 	// 获取User-Agent
 	if ua := headers.Get("User-Agent"); ua != "" {
+		ua = StripUserAgentSourceDescriptor(ua, "codehub")
 		if normalizedUA := composeLearnedClaudeCLIUserAgent(ua, ua); normalizedUA != "" {
 			fp.UserAgent = normalizedUA
 		} else {
@@ -157,7 +158,7 @@ func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fin
 func mergeHeadersIntoFingerprint(fp *Fingerprint, headers http.Header) {
 	// User-Agent：版本升级的触发条件，一定存在
 	if ua := headers.Get("User-Agent"); ua != "" {
-		fp.UserAgent = ua
+		fp.UserAgent = StripUserAgentSourceDescriptor(ua, "codehub")
 	}
 	// X-Stainless-* 头：仅在请求中实际携带时才更新，否则保留缓存值
 	mergeHeader(headers, "X-Stainless-Lang", &fp.StainlessLang)
@@ -247,7 +248,7 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 
 	// 设置user-agent
 	if fp.UserAgent != "" {
-		req.Header.Set("user-agent", fp.UserAgent)
+		req.Header.Set("user-agent", StripUserAgentSourceDescriptor(fp.UserAgent, "codehub"))
 	}
 
 	// 设置x-stainless-*头

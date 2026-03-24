@@ -69,6 +69,8 @@ type SystemSettings struct {
 	// Claude Code version check
 	MinClaudeCodeVersion string
 	MaxClaudeCodeVersion string
+	// 限制只有带 codehub 标记的客户端访问 Claude Code 相关端点
+	RestrictCodeHubClientAccess bool
 
 	// 分组隔离：允许未分组 Key 调度（默认 false → 403）
 	AllowUngroupedKeyScheduling bool

@@ -278,6 +278,53 @@ func (v *ClaudeCodeValidator) ExtractVersion(ua string) string {
 	return ExtractCLIVersion(ua)
 }
 
+func UserAgentHasSourceDescriptor(ua, descriptor string) bool {
+	descriptor = strings.TrimSpace(strings.ToLower(descriptor))
+	if descriptor == "" {
+		return false
+	}
+	for _, part := range extractUserAgentDescriptors(ua) {
+		if strings.EqualFold(strings.TrimSpace(part), descriptor) {
+			return true
+		}
+	}
+	return false
+}
+
+func StripUserAgentSourceDescriptor(ua, descriptor string) string {
+	ua = strings.TrimSpace(ua)
+	descriptor = strings.TrimSpace(strings.ToLower(descriptor))
+	if ua == "" || descriptor == "" {
+		return ua
+	}
+
+	product := extractProduct(ua)
+	version := ExtractCLIVersion(ua)
+	descriptors := extractUserAgentDescriptors(ua)
+	if len(descriptors) == 0 {
+		return ua
+	}
+
+	filtered := make([]string, 0, len(descriptors))
+	for _, part := range descriptors {
+		if strings.EqualFold(strings.TrimSpace(part), descriptor) {
+			continue
+		}
+		filtered = append(filtered, strings.TrimSpace(part))
+	}
+
+	if len(filtered) == len(descriptors) {
+		return ua
+	}
+	if product == "" || version == "" {
+		return strings.TrimSpace(ua)
+	}
+	if len(filtered) == 0 {
+		return product + "/" + version
+	}
+	return product + "/" + version + " (" + strings.Join(filtered, ", ") + ")"
+}
+
 // SetClaudeCodeVersion 将 Claude Code 版本号设置到 context 中
 func SetClaudeCodeVersion(ctx context.Context, version string) context.Context {
 	return context.WithValue(ctx, ctxkey.ClaudeCodeVersion, version)

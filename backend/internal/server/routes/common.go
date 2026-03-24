@@ -18,6 +18,11 @@ func RegisterCommonRoutes(r *gin.Engine) {
 		c.Status(http.StatusOK)
 	})
 
+	// Claude Code penguin mode capability probe.
+	r.GET("/api/claude_code_penguin_mode", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"enabled": true})
+	})
+
 	// Setup status endpoint (always returns needs_setup: false in normal mode)
 	// This is used by the frontend to detect when the service has restarted after setup
 	r.GET("/setup/status", func(c *gin.Context) {
