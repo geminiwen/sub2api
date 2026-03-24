@@ -154,6 +154,10 @@ func RegisterGatewayRoutes(
 	}
 	// Sora 媒体代理（签名 URL，无需 API Key）
 	r.GET("/sora/media-signed/*filepath", h.SoraGateway.MediaProxySigned)
+
+	// Tengu telemetry proxy（兼容 Anthropic 1P event_logging 协议）
+	tenguMiddlewares := []gin.HandlerFunc{bodyLimit, clientRequestID, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic}
+	r.POST("/api/event_logging/v2/batch", append(tenguMiddlewares, h.Tengu.BatchEvents)...)
 }
 
 // getGroupPlatform extracts the group platform from the API Key stored in context.
