@@ -17,15 +17,13 @@ import (
 
 // TenguHandler handles Tengu telemetry proxy requests.
 type TenguHandler struct {
-	tenguService   *service.TenguProxyService
-	settingService *service.SettingService
+	tenguService *service.TenguProxyService
 }
 
 // NewTenguHandler creates a new TenguHandler.
-func NewTenguHandler(tenguService *service.TenguProxyService, settingService *service.SettingService) *TenguHandler {
+func NewTenguHandler(tenguService *service.TenguProxyService) *TenguHandler {
 	return &TenguHandler{
-		tenguService:   tenguService,
-		settingService: settingService,
+		tenguService: tenguService,
 	}
 }
 
@@ -34,18 +32,6 @@ func NewTenguHandler(tenguService *service.TenguProxyService, settingService *se
 // sticky-session-bound account, enriches identity fields, and forwards to
 // api.anthropic.com. Events without a resolvable session_id are dropped.
 func (h *TenguHandler) BatchEvents(c *gin.Context) {
-	if !validateCodeHubClientUserAgent(c, h.settingService, func(c *gin.Context, status int, errType, message string) {
-		c.JSON(status, gin.H{
-			"type": "error",
-			"error": gin.H{
-				"type":    errType,
-				"message": message,
-			},
-		})
-	}) {
-		return
-	}
-
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{

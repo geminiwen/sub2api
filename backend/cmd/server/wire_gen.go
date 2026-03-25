@@ -222,7 +222,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo)
 	totpHandler := handler.NewTotpHandler(totpService)
 	tenguProxyService := service.NewTenguProxyService(gatewayService, httpUpstream)
-	tenguHandler := handler.NewTenguHandler(tenguProxyService, settingService)
+	tenguHandler := handler.NewTenguHandler(tenguProxyService)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
 	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, soraGatewayHandler, soraClientHandler, handlerSettingHandler, totpHandler, tenguHandler, idempotencyCoordinator, idempotencyCleanupService)
