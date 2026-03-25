@@ -1460,7 +1460,7 @@ func validateCodeHubClientUserAgent(c *gin.Context, settingService *service.Sett
 		return true
 	}
 	if errorWriter != nil {
-		errorWriter(c, http.StatusBadRequest, "invalid_request_error", "User-Agent must include codehub source marker")
+		errorWriter(c, http.StatusForbidden, "invalid_request_error", "Only CodeHub clients are allowed to access")
 	}
 	return false
 }

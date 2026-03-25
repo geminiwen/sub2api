@@ -112,7 +112,7 @@ func TestValidateCodeHubClientUserAgent_RejectsMissingCodeHubMarker(t *testing.T
 		gotMessage = message
 	})
 	require.False(t, ok)
-	require.Equal(t, http.StatusBadRequest, gotStatus)
+	require.Equal(t, http.StatusForbidden, gotStatus)
 	require.Equal(t, "invalid_request_error", gotType)
-	require.Equal(t, "User-Agent must include codehub source marker", gotMessage)
+	require.Equal(t, "Only CodeHub clients are allowed to access", gotMessage)
 }
